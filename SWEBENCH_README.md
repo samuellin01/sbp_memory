@@ -37,7 +37,7 @@ Two experiment configurations are run by default (A/B):
 | **podman** (or docker) | Must be installed and accessible on `$PATH`. `docker` can be used via `--container_runtime docker`. |
 | **`with-proxy`** | The `with-proxy` helper must be on `$PATH` (available on devvm). It wraps the podman run command for correct network/proxy routing. |
 | **SWE-Bench Pro images** | Images are pulled from the internal registry `vmvm-registry.fbinfra.net/sweap_retag/<instance_id>` on demand. |
-| **`cf_env.tar.gz`** | Conda environment tarball placed in `--data_dir` (default `~/workspace/cf_memory`). Unpacked into `/opt/appenv` inside the container. |
+| **`cf_env.tar.gz`** | Conda environment tarball placed in `--data_dir` (default `~/workspace/sbp_memory`). Unpacked into `/opt/appenv` inside the container. |
 | **`app.pex`** | The Confucius PEX binary placed in `--data_dir`. Copied to `/usr/local/bin/app.pex` inside the container by the setup step. |
 | **`sbp-problems.jsonl`** | Included in the repo root. Contains SWE-Bench Pro problem definitions. |
 | **AWS credentials** | Required if using AWS Bedrock as the LLM provider. Obtained via `cloud aws get-creds`. |
@@ -198,7 +198,7 @@ python scripts/run_batch_swebench.py \
 | `--pex_path` | `/usr/local/bin/app.pex` | Path to the `app.pex` binary inside the container |
 | `--container_runtime` | `podman` | Container runtime (`podman` or `docker`) |
 | `--image_registry` | `vmvm-registry.fbinfra.net/sweap_retag` | Container image registry prefix (instance_id is appended) |
-| `--data_dir` | `~/workspace/cf_memory` | Host directory mounted as `/data` in the container |
+| `--data_dir` | `~/workspace/sbp_memory` | Host directory mounted as `/data` in the container |
 | `--container_memory` | `4g` | Memory limit per container (passed to `--memory` and `--memory-swap`) |
 | `--result_dir` | `./results_swebench` | Local directory for storing results |
 | `--task_timeout` | `3600` | Per-problem timeout in seconds |
@@ -218,7 +218,7 @@ python scripts/run_batch_swebench.py \
 
 ### Run all problems with both configs
 ```bash
-cd /path/to/cf_memory
+cd /path/to/sbp_memory
 python scripts/run_batch_swebench.py
 ```
 
@@ -266,7 +266,7 @@ python scripts/run_batch_swebench.py \
 ### Custom data directory and image registry
 ```bash
 python scripts/run_batch_swebench.py \
-  --data_dir /my/workspace/cf_memory \
+  --data_dir /my/workspace/sbp_memory \
   --image_registry my-registry.example.com/images
 ```
 
