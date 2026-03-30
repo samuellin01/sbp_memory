@@ -51,67 +51,27 @@ def get_context_edit_tool_description(
     enforce_clear_at_least: bool,
 ) -> str:
     """Generate tool description with config parameters."""
-    description = f"""Edit conversation context by rewriting tool results to save tokens.
+    description = f"""Edit conversation context by compressing tool results to save tokens.
 
-Use this tool when context usage is high (e.g., >50%-60% of context window) to optimize memory:
-- REWRITE: Rewrite tool results on a spectrum from minimal annotation to selective omission.
+Use this tool when context usage is high to optimize memory. You provide guidance on what to keep/omit for each tool result, and a compression agent handles the actual rewriting.
 
-**How to rewrite — choose based on relevance:**
+**Your job:** For each tool result you want to compress, provide:
+- The tool_use_id
+- Guidance describing what content is relevant and should be kept, and what can be omitted
 
-**If the content has relevant parts you may need again** — use **selective omission**:
-  Keep exact original lines verbatim for relevant sections. Use `[lines N-M omitted: description]` markers for irrelevant sections. Be as granular as needed — you can have many alternating omit/keep sections:
-
-  ```
-  [lines 1-44 omitted: imports, config constants, logger setup]
-
-  def process_payment(order_id, amount):
-      tx = db.begin_transaction()
-      try:
-          record = PaymentRecord(order_id=order_id, amount=amount)
-          tx.insert(record)
-          gateway.charge(record)
-          tx.commit()
-      except GatewayError as e:
-          tx.rollback()
-          raise PaymentFailed(order_id, e)
-
-  [lines 61-120 omitted: refund_payment, list_transactions]
-
-  def generate_report(start_date, end_date):
-      transactions = db.query(Transaction).filter(
-          Transaction.date.between(start_date, end_date)
-      ).all()
-      return ReportBuilder(transactions).build()
-
-  [lines 140-350 omitted: export_csv, admin helpers, CLI commands]
-  ```
-
-  Rules:
-  - Preserved lines are EXACT copies from the original — never paraphrase code or structured content
-  - You can have many alternating omit/keep sections (omit → keep → omit → keep → ...), not just one keep block
-  - The omission markers briefly describe what was skipped
-  - This applies to any tool result with relevant content: code files, diffs, error tracebacks, command output with structured data, etc.
-  - ⚠️ The larger the result, the MORE important selective omission is — don't fall back to prose for big files
-  - ❌ WRONG: "Viewed test/file.js (500 lines). Tests cover X, Y, Z. The edit function uses socket calls."
-  - ✅ RIGHT: `[lines 1-50 omitted: ...]` then exact code then `[lines 100-500 omitted: ...]`
-
-**If the content is totally irrelevant to the current task** — use **minimal annotation**:
-  A one-line summary is fine when nothing in the result is worth preserving verbatim:
-  - "Viewed /app/package.json — project config with express, jest deps. Not relevant to current task."
-  - "Ran grep for 'TODO' — found 12 matches, none relevant."
-  - "Build succeeded. 142 tests passed, 0 failed."
-  - "Found 3 matches: src/auth.py:45, src/auth.py:112, src/middleware.py:23"
+**Examples of good guidance:**
+- "Keep the edit function (lines ~148-154) and the delete function. Omit imports, other socket handlers."
+- "Keep chat-related error entries. Omit all non-chat entries."
+- "Totally irrelevant to current task — compress to a one-liner."
+- "Keep the git diff hunks for assert.js. Omit the test file changes."
 
 **Key principles:**
-- **Bias toward keeping**: Your instinct may be to summarize — resist it. Default to keeping original content. Only omit lines you are confident are irrelevant. When in doubt, keep.
-- **Breadth over depth**: Prefer trimming a little from many tool results over aggressively compressing a few. Light selective omission across 10 results preserves more useful context than summarizing 3 results into one-liners.
-- **Prioritize older, outdated tool uses** for rewriting. Keep recent tool uses relevant to the current task.
+- **Breadth over depth**: Prefer compressing many tool results lightly over aggressively compressing a few.
+- **Prioritize older, outdated tool uses** for compression. Keep recent tool uses relevant to the current task.
+- **Preserve Dynamic Contexts:** Do NOT compress tool uses that load dynamic context (e.g., `skill_view`).
+- **Do NOT compress** tool uses that were already rewritten in previous `{CONTEXT_EDIT_TOOL_NAME}` calls.
 
 All tool uses not in the edit list will be kept unchanged.
-
-**Preserve Dynamic Contexts:** Do NOT rewrite tool uses that load dynamic context (e.g., `skill_view`). These provide critical instructions and reference materials that guide task execution.
-
-**Important:** Do NOT attempt to edit tool uses that were already rewritten in previous `{CONTEXT_EDIT_TOOL_NAME}` calls if they have minimal content remaining.
 """
 
     # Only include edit accumulation section if enforcement is enabled
@@ -169,6 +129,63 @@ You MUST use `{tool_name}` or memory tools now - all other tools are blocked.
 ⚠️ **Cache Consideration**: Clearing context invalidates cached prompt prefixes.
 Make each edit worthwhile by clearing enough tokens (at least {clear_at_least:,})
 and avoiding too-frequent calls.
+"""
+
+COMPRESSION_AGENT_SYSTEM_PROMPT = """\
+You are a context compression agent. Your job is to compress a tool result using selective omission.
+
+You will receive:
+1. The original tool result content
+2. Guidance from the main agent about what is relevant
+
+Your task: produce a compressed version that preserves relevant content verbatim and omits irrelevant sections.
+
+**Rules:**
+
+For content with relevant parts — use **selective omission**:
+- Keep exact original lines VERBATIM for relevant sections — never paraphrase or summarize code
+- Use `[lines N-M omitted: brief description]` markers for irrelevant sections
+- Be as granular as needed — you can have many alternating omit/keep sections
+- Bias toward keeping. When in doubt, keep the content. Only omit lines you are confident are irrelevant.
+
+Example — a 350-line file where functions at lines 45-60 and 120-135 are relevant:
+```
+[lines 1-44 omitted: imports, config constants, logger setup]
+
+def process_payment(order_id, amount):
+    tx = db.begin_transaction()
+    try:
+        record = PaymentRecord(order_id=order_id, amount=amount)
+        tx.insert(record)
+        gateway.charge(record)
+        tx.commit()
+    except GatewayError as e:
+        tx.rollback()
+        raise PaymentFailed(order_id, e)
+
+[lines 61-119 omitted: refund_payment, list_transactions]
+
+def generate_report(start_date, end_date):
+    transactions = db.query(Transaction).filter(
+        Transaction.date.between(start_date, end_date)
+    ).all()
+    return ReportBuilder(transactions).build()
+
+[lines 136-350 omitted: export_csv, admin helpers, CLI commands]
+```
+
+For content that is totally irrelevant — a one-line annotation is fine:
+- "Viewed /app/package.json — project config with express, jest deps. Not relevant to current task."
+
+Output ONLY the compressed content. No explanation, no preamble.
+"""
+
+COMPRESSION_AGENT_USER_PROMPT_TEMPLATE = """\
+## Guidance from main agent
+{guidance}
+
+## Original tool result content ({token_count} tokens)
+{content}
 """
 
 AUTO_FORCE_MESSAGE_TEMPLATE = """⚠️ **Auto-Force Context Cleanup Triggered**
