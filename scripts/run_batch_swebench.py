@@ -1080,10 +1080,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--data_dir",
         type=str,
-        default=os.path.expanduser("~/workspace/cf_memory"),
+        default=os.path.expanduser("~/workspace/sbp_memory"),
         help=(
             "Host path mounted as /data inside the container (supplies cf_env.tar.gz and app.pex). "
-            "Default: ~/workspace/cf_memory"
+            "Default: ~/workspace/sbp_memory"
         ),
     )
     parser.add_argument(
