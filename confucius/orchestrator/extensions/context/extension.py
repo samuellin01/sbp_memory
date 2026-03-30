@@ -41,13 +41,13 @@ SYS_INFO_TOOL_USE_ID_KEY = "system_info_tool_use_id"
 PENDING_DATA_KEY = "pending_data"
 # Marker placed in tool_use input when a tool use has been cleared by context management
 CLEARED_TOOL_USE_KEY = "_context_management_cleared"
+REWRITTEN_TOOL_USE_KEY = "_context_management_rewritten"
 
 
 class ContextEditOperation(str, Enum):
     """Operations for context editing."""
 
-    IGNORE = "IGNORE"
-    COMPACT = "COMPACT"
+    REWRITE = "REWRITE"
 
 
 class ContextEdit(BaseModel):
@@ -59,19 +59,19 @@ class ContextEdit(BaseModel):
 
     operation: ContextEditOperation = Field(
         description=(
-            "IGNORE: Remove tool use entirely from context. "
-            "COMPACT: Replace with summary to save tokens."
+            "REWRITE: Rewrite tool result to save tokens. "
+            "Use selective omission for code/file content (keep relevant lines verbatim, bracket out the rest). "
+            "Use concise summary for command output (extract key result)."
         )
     )
 
     tool_use_input_replacement: dict[str, Any] | None = Field(
         default=None,
-        description="For COMPACT: Summarized tool input to replace verbose original",
+        description="Optional: replacement for verbose tool input (rarely needed since inputs are usually small)",
     )
 
-    tool_result_content_replacement: str | None = Field(
-        default=None,
-        description="For COMPACT: Summary to replace verbose tool result",
+    tool_result_content_replacement: str = Field(
+        description="Rewritten tool result content. Ranges from a one-line annotation (least relevant) to selective omission preserving exact original lines (most relevant).",
     )
 
     reason: str | None = Field(
@@ -132,8 +132,7 @@ class ValidationResult(BaseModel):
 class EditStats(BaseModel):
     """Statistics about applied edits."""
 
-    removed_count: int
-    compacted_count: int
+    rewritten_count: int
     kept_count: int
     tokens_before: int
     tokens_after: int
@@ -258,7 +257,7 @@ class SmartContextManagementExtension(
     )
     max_continuous_edits: int = Field(
         default=3,
-        description="Maximum number of continuous context_edit attempts before auto-forcing additional IGNORE edits on oldest tool uses",
+        description="Maximum number of continuous context_edit attempts before auto-forcing additional REWRITE edits on oldest tool uses",
     )
     merge_fully_ignored_turns_enabled: bool = Field(
         default=True,
@@ -422,54 +421,32 @@ class SmartContextManagementExtension(
         """Get the enforced input tokens trigger (now just returns input_tokens_trigger directly)."""
         return self.input_tokens_trigger
 
-    def _is_message_fully_ignored(self, msg: CfMessage) -> bool:
-        """Check if ALL tool_use_ids in this message are ignored."""
+    def _is_message_fully_processed(self, msg: CfMessage) -> bool:
+        """Check if ALL tool_use_ids in this message have been processed (cleared or rewritten)."""
         tool_use_ids = self._extract_tool_use_ids_from_message(msg)
         if not tool_use_ids:
             return False
         return all(tid in self._ignored_tool_use_ids for tid in tool_use_ids)
-
-    def _create_tool_use_input_ignore_placeholder(self) -> dict[str, Any]:
-        """Create placeholder input for ignored tool_use messages.
-
-        Returns a dict with explicit marker that prevents LLM confusion
-        by clearly indicating this is a cleared system placeholder.
-
-        Returns:
-            Dict with cleared marker
-        """
-        return {CLEARED_TOOL_USE_KEY: True}
-
-    def _create_tool_result_ignore_placeholder(self) -> str:
-        """Create placeholder text for ignored tool_result messages.
-
-        Returns:
-            Placeholder text string
-        """
-        return "The result was cleared"
 
     async def _calculate_compressible_tokens(self, context: AnalectRunContext) -> int:
         """
         Calculate total tokens from all tracked tool use messages (roofline).
 
         This represents the maximum possible token savings if all tool uses
-        were removed or compacted to zero tokens.
+        were rewritten to minimal content.
 
         Args:
             context: The analect run context.
 
         Returns:
-            Total tokens from all non-ignored tool use, tool result, and tool_use_info messages.
+            Total tokens from all non-processed tool use, tool result, and tool_use_info messages.
         """
         self._build_tool_use_message_map(context)
         total = 0
         for tool_use_id, tool_use_msgs in self._tool_use_message_map.items():
-            # Only count non-ignored messages
-            # Cache tool_use lookup to avoid double property access
             tool_use = tool_use_msgs.tool_use
             if tool_use is not None and tool_use_id not in self._ignored_tool_use_ids:
-                # Collect all three messages for this tool use
-                messages_to_count = [tool_use]  # Already verified non-None
+                messages_to_count = [tool_use]
                 if tool_use_msgs.tool_result is not None:
                     messages_to_count.append(tool_use_msgs.tool_result)
                 if tool_use_msgs.tool_use_info is not None:
@@ -479,21 +456,7 @@ class SmartContextManagementExtension(
                     token_lengths = await self.get_prompt_token_lengths(
                         messages_to_count
                     )
-                    # Calculate placeholder sizes for both tool_use and tool_result
-                    tool_use_placeholder = await self._get_tool_use_placeholder_size(
-                        tool_use_id, tool_use
-                    )
-                    tool_result_placeholder = (
-                        await self._get_tool_result_placeholder_size(
-                            tool_use_id, tool_use
-                        )
-                        if tool_use_msgs.tool_result is not None
-                        else 0
-                    )
-                    total_placeholder_size = (
-                        tool_use_placeholder + tool_result_placeholder
-                    )
-                    total += max(0, sum(token_lengths) - total_placeholder_size)
+                    total += sum(token_lengths)
         return total
 
     @override
@@ -551,7 +514,7 @@ class SmartContextManagementExtension(
                     "result_tokens": registry_entry.get("result_tokens", 0),
                     "image_count": registry_entry.get("image_count", 0),
                     "image_tokens": registry_entry.get("image_tokens", 0),
-                    "ignored": tuid in self._ignored_tool_use_ids,
+                    "rewritten": tuid in self._ignored_tool_use_ids,
                 })
             cache_read = None
             last_prompt = self.get_last_prompt_token_length()
@@ -568,7 +531,7 @@ class SmartContextManagementExtension(
                 "total_tokens": total_length,
                 "context_fill_ratio": round(total_length / self.context_window_size, 4),
                 "num_tool_uses": len(tool_use_summary),
-                "num_ignored": sum(1 for t in tool_use_summary if t["ignored"]),
+                "num_rewritten": sum(1 for t in tool_use_summary if t["rewritten"]),
                 "compressible_tokens": self._compressible_tokens,
                 "enforce_mode": self._enforce_mode,
                 "tool_use_summary": tool_use_summary,
@@ -704,7 +667,10 @@ class SmartContextManagementExtension(
             try:
                 tool_use = ant.MessageContentToolUse.model_validate(item)
                 if tool_use.id == tool_use_id:
-                    return isinstance(tool_use.input, dict) and tool_use.input.get(CLEARED_TOOL_USE_KEY) is True
+                    return isinstance(tool_use.input, dict) and (
+                        tool_use.input.get(CLEARED_TOOL_USE_KEY) is True
+                        or tool_use.input.get(REWRITTEN_TOOL_USE_KEY) is True
+                    )
             except Exception:
                 continue
         return False
@@ -735,7 +701,7 @@ class SmartContextManagementExtension(
         if self.merge_fully_ignored_turns_enabled:
             merge_fully_ignored_turns(
                 memory_manager=context.memory_manager,
-                is_ignored_fn=self._is_message_fully_ignored,
+                is_ignored_fn=self._is_message_fully_processed,
             )
 
         # 2. Then: Ignore THIS context_edit's tool uses
@@ -1193,8 +1159,7 @@ class SmartContextManagementExtension(
             "tokens_after": stats.tokens_after,
             "tokens_saved": stats.tokens_saved,
             "savings_percent": round(stats.savings_percent, 1),
-            "removed_count": stats.removed_count,
-            "compacted_count": stats.compacted_count,
+            "rewritten_count": stats.rewritten_count,
         })
 
         # Write consolidated JSON record
@@ -1207,8 +1172,7 @@ class SmartContextManagementExtension(
             "tokens_after": stats.tokens_after,
             "tokens_saved": stats.tokens_saved,
             "savings_percent": round(stats.savings_percent, 1),
-            "removed_count": stats.removed_count,
-            "compacted_count": stats.compacted_count,
+            "rewritten_count": stats.rewritten_count,
             "edits": edit_items,
         })
 
@@ -1331,14 +1295,16 @@ class SmartContextManagementExtension(
 
         return ordered_ids
 
-    async def _auto_force_ignore_edits(
+    async def _auto_force_rewrite_edits(
         self,
         context: AnalectRunContext,
         current_savings: int,
         valid_edits: list[ContextEdit],
     ) -> tuple[list[ContextEdit], int]:
         """
-        Automatically generate IGNORE edits for oldest tool uses until threshold is met.
+        Automatically generate REWRITE edits for oldest tool uses until threshold is met.
+
+        Auto-generated rewrites use minimal descriptions based on tool name and input.
 
         Args:
             context: The analect run context
@@ -1352,25 +1318,8 @@ class SmartContextManagementExtension(
         if remaining_needed <= 0:
             return [], 0
 
-        # Get IDs from current cycle's validated edits (not stale _pending_data)
         pending_ids = {edit.tool_use_id for edit in valid_edits}
-
-        # Get oldest tool uses to force-ignore
         oldest_ids = self._get_oldest_non_ignored_tool_uses(context, pending_ids)
-
-        # Calculate how many tool uses we can safely ignore (respect keep constraint)
-        # Exclude already-ignored tool uses from count (same pattern as _validate_minimum_retention)
-        total_tool_uses = sum(
-            1
-            for tool_use_id, msgs in self._tool_use_message_map.items()
-            if msgs.tool_use is not None and tool_use_id not in self._ignored_tool_use_ids
-        ) - len(self._context_edit_tool_uses)
-        pending_ignore_count = sum(
-            1
-            for e in self._pending_data.edits
-            if e.operation == ContextEditOperation.IGNORE
-        )
-        can_ignore = max(0, total_tool_uses - self.keep - pending_ignore_count)
 
         forced_edits: list[ContextEdit] = []
         additional_savings = 0
@@ -1379,23 +1328,43 @@ class SmartContextManagementExtension(
             if additional_savings >= remaining_needed:
                 break
 
-            # Respect keep constraint
-            if len(forced_edits) >= can_ignore:
-                break
+            tool_use_msgs = self._get_tool_use_messages(tool_use_id)
+            tool_use_msg = tool_use_msgs.tool_use
+            if tool_use_msg is None:
+                continue
 
-            # Create IGNORE edit
+            # Generate minimal replacement based on tool name
+            tool_name = self._extract_tool_name(tool_use_id, tool_use_msg)
+            original_input = self._extract_tool_use_input(tool_use_msg, tool_use_id)
+            replacement = self._generate_auto_rewrite(tool_name, original_input)
+
             edit = ContextEdit(
                 tool_use_id=tool_use_id,
-                operation=ContextEditOperation.IGNORE,
+                operation=ContextEditOperation.REWRITE,
+                tool_result_content_replacement=replacement,
                 reason="Auto-forced due to max continuous edits exceeded",
             )
 
-            # Estimate savings
             savings = await self._estimate_edit_token_savings(edit, context)
             forced_edits.append(edit)
             additional_savings += savings
 
         return forced_edits, additional_savings
+
+    def _generate_auto_rewrite(self, tool_name: str, original_input: dict[str, Any] | None) -> str:
+        """Generate a minimal rewrite replacement for auto-forced edits."""
+        if original_input is None:
+            return f"[Auto-rewritten] Ran {tool_name}. Output cleared to save context."
+
+        if tool_name == "bash":
+            command = str(original_input.get("command", ""))[:150]
+            return f"[Auto-rewritten] Ran bash: {command}. Output cleared to save context."
+        elif tool_name == "str_replace_based_edit_tool":
+            file_path = original_input.get("path", original_input.get("file_path", ""))
+            cmd = original_input.get("command", "view")
+            return f"[Auto-rewritten] {cmd} {file_path}. Content cleared to save context."
+        else:
+            return f"[Auto-rewritten] Ran {tool_name}. Output cleared to save context."
 
     async def _show_auto_force_notification(
         self,
@@ -1442,13 +1411,12 @@ class SmartContextManagementExtension(
         Returns:
             Formatted success message with auto-force details
         """
-        auto_ignored_list = ", ".join(edit.tool_use_id for edit in forced_edits)
+        auto_rewritten_list = ", ".join(edit.tool_use_id for edit in forced_edits)
 
-        return f"""✅ **Context Edit Applied** (with auto-forced edits)
+        return f"""✅ **Context Edit Applied** (with auto-forced rewrites)
 
 **Results:**
-- Removed: {stats.removed_count} tool use(s)
-- Compacted: {stats.compacted_count} tool use(s)
+- Rewritten: {stats.rewritten_count} tool use(s)
 - Kept unchanged: {stats.kept_count} tool use(s)
 
 **Token savings:**
@@ -1456,7 +1424,7 @@ class SmartContextManagementExtension(
 - After: ~{stats.tokens_after or 0:,} tokens
 - Saved: ~{stats.tokens_saved or 0:,} tokens ({stats.savings_percent or 0.0:.1f}%)
 
-**Auto-ignored tool uses ({len(forced_edits)}):** {auto_ignored_list}
+**Auto-rewritten tool uses ({len(forced_edits)}):** {auto_rewritten_list}
 """
 
     async def _handle_auto_force_edits(
@@ -1467,7 +1435,7 @@ class SmartContextManagementExtension(
         context: AnalectRunContext,
     ) -> ant.MessageContentToolResult:
         """
-        Handle auto-forcing IGNORE edits when max attempts exceeded.
+        Handle auto-forcing REWRITE edits when max attempts exceeded.
 
         Args:
             validation_result: Current validation result with pending edits
@@ -1479,13 +1447,13 @@ class SmartContextManagementExtension(
             Tool result with success or partial success message
         """
         # Generate forced edits
-        forced_edits, additional_savings = await self._auto_force_ignore_edits(
+        forced_edits, additional_savings = await self._auto_force_rewrite_edits(
             context, validation_result.estimated_savings, validation_result.valid_edits
         )
 
         pending_count = len(validation_result.valid_edits)
 
-        # If no more tool uses to force-ignore, apply what we have
+        # If no more tool uses to force-rewrite, apply what we have
         if not forced_edits:
             # Apply pending edits even if below threshold - exit gracefully
             stats, edit_items = await self._apply_edits(validation_result.valid_edits, context)
@@ -1502,19 +1470,17 @@ class SmartContextManagementExtension(
                 "tokens_after": stats.tokens_after,
                 "tokens_saved": stats.tokens_saved,
                 "savings_percent": round(stats.savings_percent, 1),
-                "removed_count": stats.removed_count,
-                "compacted_count": stats.compacted_count,
+                "rewritten_count": stats.rewritten_count,
                 "edits": edit_items,
             })
 
             result = f"""⚠️ **Context Edit Applied** (partial - threshold not met)
 
-No more tool uses available to auto-ignore due to `keep` constraint.
+No more tool uses available to auto-rewrite.
 Applied {len(validation_result.valid_edits)} pending edit(s).
 
 **Results:**
-- Removed: {stats.removed_count} tool use(s)
-- Compacted: {stats.compacted_count} tool use(s)
+- Rewritten: {stats.rewritten_count} tool use(s)
 - Kept unchanged: {stats.kept_count} tool use(s)
 
 **Token savings:**
@@ -1557,8 +1523,7 @@ Applied {len(validation_result.valid_edits)} pending edit(s).
             "tokens_after": stats.tokens_after,
             "tokens_saved": stats.tokens_saved,
             "savings_percent": round(stats.savings_percent, 1),
-            "removed_count": stats.removed_count,
-            "compacted_count": stats.compacted_count,
+            "rewritten_count": stats.rewritten_count,
             "edits": edit_items,
         })
 
@@ -1694,8 +1659,7 @@ Applied {len(validation_result.valid_edits)} pending edit(s).
 
         result += f"""
 Changes:
-- {stats.removed_count} tool uses removed (IGNORE)
-- {stats.compacted_count} tool uses compacted (COMPACT)
+- {stats.rewritten_count} tool uses rewritten
 - {stats.kept_count} tool uses kept unchanged
 
 Token Savings:
@@ -1716,9 +1680,9 @@ NOTE:
 You cleared ~{stats.tokens_saved or 0:,} tokens, which is less than the recommended {self.practical_clear_at_least:,} tokens.
 
 This may not justify the cost of invalidating the prompt cache. Next time, please try to:
-- Remove more outdated tool uses
-- Compact more verbose inputs and/or results
-- Clear older, less relevant content
+- Rewrite more aggressively (shorter summaries, more omission)
+- Target older, less relevant tool uses
+- Rewrite large file reads and verbose command outputs
 
 This helps make each context edit more worthwhile.
 """
@@ -1809,24 +1773,18 @@ Current Status:
 
 **CRITICAL: You MUST be MORE AGGRESSIVE in context compression to avoid repeated editing loops.**
 
-Your current edits are too conservative. Be significantly more aggressive:
+Your current rewrites are too conservative. Be significantly more aggressive:
 
-1. **IGNORE more liberally** - Remove ALL outdated/exploratory/redundant tool uses:
-   - Failed attempts that were superseded
-   - Exploratory queries no longer relevant
-   - Duplicate or similar operations
-   - Old context that's been saved to memory
+1. **Rewrite more aggressively** - Use shorter summaries and more omission:
+   - Large file reads → one-line description of what was in the file
+   - Verbose command output → extract only the key result
+   - Old exploratory reads → minimal annotation
 
-2. **COMPACT more extensively** - Heavily summarize verbose inputs and/or results:
-   - Large file contents → brief summaries
-   - Long query results → key insights only
-   - Verbose inputs/outputs → essential information only
-
-3. **Prioritize OLDER content** - Recent work is more likely relevant:
+2. **Prioritize OLDER content** - Recent work is more likely relevant:
    - Start from the earliest tool uses
    - Work your way forward chronologically
 
-4. **Think in BATCHES** - Don't edit one at a time:
+3. **Think in BATCHES** - Don't edit one at a time:
    - Review 5-10 tool uses at once
    - Submit comprehensive edits together
 
@@ -1876,8 +1834,8 @@ Status:
 You MUST call `context_edit` again with more edits to reach the minimum threshold before you can exit.
 
 Tips to reach the threshold:
-- Remove more outdated tool uses (IGNORE operation)
-- Compact more verbose inputs and/or results (COMPACT operation)
+- Rewrite more aggressively (shorter annotations, more omission)
+- Target large file reads and verbose command outputs
 - Focus on older, less relevant content
 - Your previous {pending_count} edit(s) are already saved and will accumulate
 """
@@ -1918,59 +1876,18 @@ Tips to reach the threshold:
             tool_use_id = edit.tool_use_id
             tool_use_msgs = self._get_tool_use_messages(tool_use_id)
 
-            # Check if tool_use exists (use has_* for efficiency)
             if not tool_use_msgs.has_tool_use():
                 rejected_edits.append(
                     RejectedEdit(edit=edit, reason="Unknown tool_use_id")
                 )
-            elif edit.operation == ContextEditOperation.IGNORE:
-                # For IGNORE, also need tool_result
-                if not tool_use_msgs.has_tool_result():
-                    rejected_edits.append(
-                        RejectedEdit(edit=edit, reason="Tool result not found")
-                    )
-                else:
-                    # tool_use is guaranteed to exist since has_tool_use() passed
-                    if edit.tool_use_id in self._ignored_tool_use_ids:
-                        rejected_edits.append(
-                            RejectedEdit(edit=edit, reason="Tool use already ignored")
-                        )
-                    else:
-                        valid_edits.append(edit)
+            elif not tool_use_msgs.has_tool_result():
+                rejected_edits.append(
+                    RejectedEdit(edit=edit, reason="Tool result not found")
+                )
             else:
-                # COMPACT operations
                 valid_edits.append(edit)
 
         return valid_edits, rejected_edits
-
-    def _validate_minimum_retention(
-        self, edits: list[ContextEdit], context: AnalectRunContext
-    ) -> list[str]:
-        """Check 2: Validate minimum tool uses retention.
-
-        Args:
-            edits: List of context edits to validate
-            context: The analect run context
-
-        Returns:
-            List of error messages if validation fails, empty list otherwise
-        """
-        errors = []
-        ignore_count = len(
-            [e for e in edits if e.operation == ContextEditOperation.IGNORE]
-        )
-        # Count actual tool uses (exclude already-ignored)
-        total_tool_uses = sum(
-            1
-            for tool_use_id, msgs in self._tool_use_message_map.items()
-            if msgs.tool_use is not None and tool_use_id not in self._ignored_tool_use_ids
-        )
-        remaining_tool_uses = total_tool_uses - ignore_count
-        if remaining_tool_uses < self.keep:
-            errors.append(
-                f"Would keep only {remaining_tool_uses} tool uses, minimum is {self.keep}"
-            )
-        return errors
 
     def _extract_tool_name(self, tool_use_id: str, tool_use_msg: CfMessage) -> str:
         """Extract tool name from tool use message."""
@@ -1986,101 +1903,65 @@ Tips to reach the threshold:
                     continue
         return tool_name
 
-    async def _get_tool_use_placeholder_size(
-        self, tool_use_id: str, tool_use_msg: CfMessage
-    ) -> int:
-        """Get placeholder size for tool_use with cleared marker input."""
-        # Extract tool name to reconstruct the tool_use
-        tool_name = self._extract_tool_name(tool_use_id, tool_use_msg)
-
-        # Create temp message with cleared marker to measure token size
-        temp_msg = CfMessage(
-            type=tool_use_msg.type,  # Keep original type
-            content=[
-                ant.MessageContentToolUse(
-                    id=tool_use_id,
-                    name=tool_name,
-                    input=self._create_tool_use_input_ignore_placeholder(),
-                ).model_dump(mode="json", exclude_none=True)
-            ],
-        )
-        placeholder_size = (await self.get_prompt_token_lengths([temp_msg]))[0]
-        return placeholder_size
-
-    async def _get_tool_result_placeholder_size(
-        self, tool_use_id: str, tool_use_msg: CfMessage
-    ) -> int:
-        """Get placeholder size for tool_result with placeholder text."""
-        # Use existing helper to create placeholder text
-        placeholder_text = self._create_tool_result_ignore_placeholder()
-
-        # Create temp message to measure token size
-        temp_msg = CfMessage(
-            type=cf.MessageType.HUMAN,  # tool_result is always HUMAN type
-            content=[
-                ant.MessageContentToolResult(
-                    tool_use_id=tool_use_id,
-                    content=placeholder_text,
-                ).model_dump(mode="json", exclude_none=True)
-            ],
-        )
-        placeholder_size = (await self.get_prompt_token_lengths([temp_msg]))[0]
-        return placeholder_size
+    def _extract_tool_use_input(self, tool_use_msg: CfMessage, tool_use_id: str) -> dict[str, Any] | None:
+        """Extract tool use input dict from a tool_use message."""
+        if isinstance(tool_use_msg.content, list):
+            for item in tool_use_msg.content:
+                try:
+                    tool_use_obj = ant.MessageContentToolUse.model_validate(item)
+                    if tool_use_obj.id == tool_use_id:
+                        if isinstance(tool_use_obj.input, dict):
+                            return tool_use_obj.input
+                except Exception:
+                    continue
+        return None
 
     async def _estimate_edit_token_savings(
         self, edit: ContextEdit, context: AnalectRunContext
     ) -> int:
-        """Calculate token savings for a single edit."""
+        """Calculate token savings for a single REWRITE edit."""
         tool_use_id = edit.tool_use_id
         tool_use_msgs = self._get_tool_use_messages(tool_use_id)
         savings = 0
 
-        if edit.operation == ContextEditOperation.IGNORE:
-            # Cache property accesses to avoid repeated lookups
-            tool_use = tool_use_msgs.tool_use
-            tool_result = tool_use_msgs.tool_result
-            tool_use_info = tool_use_msgs.tool_use_info
+        # Tool result savings (always has replacement)
+        tool_result = tool_use_msgs.tool_result
+        if tool_result is not None:
+            original_size = (await self.get_prompt_token_lengths([tool_result]))[0]
+            temp_msg = CfMessage(
+                type=cf.MessageType.HUMAN,
+                content=[
+                    ant.MessageContentToolResult(
+                        tool_use_id=tool_use_id,
+                        content=edit.tool_result_content_replacement,
+                    ).model_dump(mode="json", exclude_none=True)
+                ],
+            )
+            new_size = (await self.get_prompt_token_lengths([temp_msg]))[0]
+            savings += max(0, original_size - new_size)
 
-            # For tool_use: Calculate difference (original - placeholder with cleared marker)
-            if tool_use is not None:
-                original_size = (await self.get_prompt_token_lengths([tool_use]))[0]
-                placeholder_size = await self._get_tool_use_placeholder_size(
-                    tool_use_id, tool_use
-                )
-                savings += max(0, original_size - placeholder_size)
+        # Tool use input savings (if replacement provided)
+        tool_use = tool_use_msgs.tool_use
+        if edit.tool_use_input_replacement is not None and tool_use is not None:
+            original_size = (await self.get_prompt_token_lengths([tool_use]))[0]
+            tool_name = self._extract_tool_name(tool_use_id, tool_use)
+            temp_msg = CfMessage(
+                type=tool_use.type,
+                content=[
+                    ant.MessageContentToolUse(
+                        id=tool_use_id,
+                        name=tool_name,
+                        input={REWRITTEN_TOOL_USE_KEY: True, **edit.tool_use_input_replacement},
+                    ).model_dump(mode="json", exclude_none=True)
+                ],
+            )
+            new_size = (await self.get_prompt_token_lengths([temp_msg]))[0]
+            savings += max(0, original_size - new_size)
 
-            # For tool_result: Calculate difference (original - placeholder text)
-            # Changed from full deletion to compaction
-            if tool_result is not None and tool_use is not None:
-                original_size = (await self.get_prompt_token_lengths([tool_result]))[0]
-                placeholder_size = await self._get_tool_result_placeholder_size(
-                    tool_use_id, tool_use
-                )
-                savings += max(0, original_size - placeholder_size)
-
-            # For tool_use_info: Still fully deleted, count full size
-            if tool_use_info is not None:
-                savings += (await self.get_prompt_token_lengths([tool_use_info]))[0]
-
-        elif edit.operation == ContextEditOperation.COMPACT:
-            replacement = edit.tool_result_content_replacement
-            # Cache property access
-            tool_result = tool_use_msgs.tool_result
-            if replacement is not None and tool_result is not None:
-                original_size = (await self.get_prompt_token_lengths([tool_result]))[0]
-
-                # Use consistent token counting method
-                temp_msg = CfMessage(
-                    type=cf.MessageType.HUMAN,
-                    content=[
-                        ant.MessageContentToolResult(
-                            tool_use_id=tool_use_id,
-                            content=replacement,
-                        ).model_dump(mode="json", exclude_none=True)
-                    ],
-                )
-                new_size = (await self.get_prompt_token_lengths([temp_msg]))[0]
-                savings = max(0, original_size - new_size)
+        # Tool use info is always deleted during rewrite
+        tool_use_info = tool_use_msgs.tool_use_info
+        if tool_use_info is not None:
+            savings += (await self.get_prompt_token_lengths([tool_use_info]))[0]
 
         return savings
 
@@ -2177,9 +2058,7 @@ Tips to reach the threshold:
         """
         Filter replacement info to only include valid edits.
 
-        Filters out:
-        1. Replacements where the new edit was rejected (tool_use_id not in valid_edits)
-        2. IGNORE -> IGNORE replacements (noisy estimation errors with no operation change)
+        Filters out replacements where the new edit was rejected (tool_use_id not in valid_edits).
 
         Args:
             replacement_info: Raw replacement info (may include rejected edits)
@@ -2191,18 +2070,12 @@ Tips to reach the threshold:
         if not replacement_info:
             return []
 
-        # Create set of valid tool_use_ids for fast lookup
         valid_tool_use_ids = {edit.tool_use_id for edit in valid_edits}
 
-        # Filter to valid edits and exclude IGNORE -> IGNORE
         return [
             info
             for info in replacement_info
             if info.tool_use_id in valid_tool_use_ids
-            and not (
-                info.old_operation == ContextEditOperation.IGNORE
-                and info.new_operation == ContextEditOperation.IGNORE
-            )
         ]
 
     async def _validate_edits(
@@ -2238,35 +2111,16 @@ Tips to reach the threshold:
                 rejected_edits=rejected_edits,
             )
 
-        # Check 2: Minimum retention (strict)
-        retention_errors = self._validate_minimum_retention(valid_edits, context)
-
-        # Check 3: Minimum savings (may pend)
+        # Check 2: Minimum savings (may pend)
         (
             estimated_savings,
             should_pend,
             edit_savings_map,
         ) = await self._validate_minimum_savings(valid_edits, context)
 
-        # If retention fails (strict check), reject ALL edits
-        if retention_errors:
-            # Filter replacement info to only valid edits (empty in this case)
-            filtered_replacement_info = self._filter_valid_replacement_info(
-                replacement_info, []
-            )
-            return ValidationResult(
-                is_safe=False,
-                failure_reason="\n".join(retention_errors),
-                valid_edits=[],
-                rejected_edits=rejected_edits,
-                estimated_savings=estimated_savings,
-                edit_savings_map=edit_savings_map,
-                replacement_info=filtered_replacement_info,
-            )
-
         # If savings fails but should pend, return pending state
         if should_pend:
-            # Filter replacement info to only valid edits and exclude IGNORE -> IGNORE
+            # Filter replacement info to only valid edits
             filtered_replacement_info = self._filter_valid_replacement_info(
                 replacement_info, valid_edits
             )
@@ -2285,7 +2139,7 @@ Tips to reach the threshold:
             )
 
         # All validation passed
-        # Filter replacement info to only valid edits and exclude IGNORE -> IGNORE
+        # Filter replacement info to only valid edits
         filtered_replacement_info = self._filter_valid_replacement_info(
             replacement_info, valid_edits
         )
@@ -2325,10 +2179,7 @@ Tips to reach the threshold:
             for tool_use_id, msgs in self._tool_use_message_map.items()
             if msgs.tool_use is not None and tool_use_id not in self._ignored_tool_use_ids
         )
-        ignored_count = len(
-            [e for e in edits if e.operation == ContextEditOperation.IGNORE]
-        )
-        kept_count = total_tool_uses - ignored_count
+        kept_count = total_tool_uses - len(edits)
 
         # Apply edits
         edit_items: list[dict[str, Any]] = []
@@ -2345,36 +2196,16 @@ Tips to reach the threshold:
                 )
             )
 
-            # Determine new content previews based on operation
-            if edit.operation == ContextEditOperation.IGNORE:
-                new_input_preview = self._extract_content_preview(
-                    self._create_tool_use_input_ignore_placeholder()                )
-                new_result_preview = self._create_tool_result_ignore_placeholder()
-                await self._ignore_tool_use_messages(
-                    tool_use_msgs, tool_use_id, context
-                )
-            elif edit.operation == ContextEditOperation.COMPACT:
-                new_input_preview = (
-                    self._extract_content_preview(
-                        edit.tool_use_input_replacement                    )
-                    if edit.tool_use_input_replacement is not None
-                    else "unchanged"
-                )
-                new_result_preview = (
-                    self._extract_content_preview(
-                        edit.tool_result_content_replacement                    )
-                    if edit.tool_result_content_replacement is not None
-                    else "unchanged"
-                )
-                await self._compact_tool_use_messages(tool_use_msgs, edit, context)
-            else:
-                context_edit_logger.warning(
-                    "Unhandled operation type %r for tool_use_id %s; skipping edit",
-                    edit.operation,
-                    tool_use_id,
-                )
-                new_input_preview = ""
-                new_result_preview = ""
+            # Apply REWRITE
+            new_input_preview = (
+                self._extract_content_preview(edit.tool_use_input_replacement)
+                if edit.tool_use_input_replacement is not None
+                else "unchanged"
+            )
+            new_result_preview = self._extract_content_preview(
+                edit.tool_result_content_replacement
+            )
+            await self._rewrite_tool_use_messages(tool_use_msgs, edit, context)
 
             # Build per-edit item for consolidated logging
             registry_entry = self._tool_use_registry.get(tool_use_id, {})
@@ -2406,10 +2237,7 @@ Tips to reach the threshold:
         tokens_after = sum(token_lengths_after)
 
         return EditStats(
-            removed_count=ignored_count,
-            compacted_count=len(
-                [e for e in edits if e.operation == ContextEditOperation.COMPACT]
-            ),
+            rewritten_count=len(edits),
             kept_count=kept_count,
             tokens_before=tokens_before,
             tokens_after=tokens_after,
@@ -2474,12 +2302,10 @@ Tips to reach the threshold:
         context: AnalectRunContext,
         placeholder_text: str | None = None,
     ) -> None:
-        """Replace tool_use with placeholder and delete tool_result and tool_use_info.
+        """Clear a tool use (used internally for context_edit tool cleanup).
 
-        This unified method:
-        1. Keeps the tool_use message but replaces content with placeholder
-        2. Deletes the tool_result message
-        3. Deletes the tool_use_info message
+        Replaces tool_use input with cleared marker and tool_result with placeholder text.
+        Deletes tool_use_info message.
 
         Args:
             tool_use_msgs: The message references from the map
@@ -2487,13 +2313,12 @@ Tips to reach the threshold:
             context: The analect run context
             placeholder_text: Optional custom placeholder text
         """
-        # Replace tool_use with placeholder (keep the message, modify content)
         tool_use = tool_use_msgs.tool_use
         if tool_use is not None:
             self._compact_tool_use_input(
                 tool_use,
                 tool_use_id,
-                self._create_tool_use_input_ignore_placeholder(),
+                {CLEARED_TOOL_USE_KEY: True},
             )
             self._ignored_tool_use_ids.add(tool_use_id)
 
@@ -2502,55 +2327,55 @@ Tips to reach the threshold:
             self._compact_tool_result(
                 tool_result,
                 tool_use_id,
-                placeholder_text or self._create_tool_result_ignore_placeholder(),
+                placeholder_text or "The result was cleared",
             )
-            # Mark by the same tool_use_id (both sides share the same ID)
             self._ignored_tool_use_ids.add(tool_use_id)
 
-        # Delete tool_use_info message (SYS message with <system_info>)
         tool_use_info_msg = tool_use_msgs.tool_use_info
         if tool_use_info_msg is not None:
             context.memory_manager.delete_message(tool_use_info_msg)
 
-        # Remove from map to keep it clean (tool_use placeholder doesn't need tracking)
         self._tool_use_message_map.pop(tool_use_id, None)
 
-    async def _compact_tool_use_messages(
+    async def _rewrite_tool_use_messages(
         self,
         tool_use_msgs: _ToolUseMessages,
         edit: ContextEdit,
         context: AnalectRunContext,
     ) -> None:
-        """Compact tool use messages with replacements (in-place modification).
+        """Rewrite tool use messages with replacement content (in-place).
 
-        This unified method coordinates compaction of both tool_use input and tool_result.
-        It delegates to the existing _compact_tool_use_input and _compact_tool_result methods
-        for the actual in-place modifications.
+        Marks tool_use input with rewritten marker, replaces tool_result content,
+        and deletes tool_use_info.
 
         Args:
             tool_use_msgs: The message references from the map
             edit: The context edit with replacement values
             context: The analect run context
         """
-        # Compact tool_use input if replacement provided
-        # Cache property access to avoid repeated lookups
         tool_use = tool_use_msgs.tool_use
-        if edit.tool_use_input_replacement is not None and tool_use is not None:
-            self._compact_tool_use_input(
-                tool_use,
-                edit.tool_use_id,
-                edit.tool_use_input_replacement,
-            )
+        if tool_use is not None:
+            if edit.tool_use_input_replacement is not None:
+                new_input = {REWRITTEN_TOOL_USE_KEY: True, **edit.tool_use_input_replacement}
+            else:
+                # Extract original input and add rewritten marker
+                original_input = self._extract_tool_use_input(tool_use, edit.tool_use_id)
+                new_input = {REWRITTEN_TOOL_USE_KEY: True, **(original_input or {})}
+            self._compact_tool_use_input(tool_use, edit.tool_use_id, new_input)
+            self._ignored_tool_use_ids.add(edit.tool_use_id)
 
-        # Compact tool_result if replacement provided
-        # Cache property access to avoid repeated lookups
         tool_result = tool_use_msgs.tool_result
-        if edit.tool_result_content_replacement is not None and tool_result is not None:
+        if tool_result is not None:
             self._compact_tool_result(
                 tool_result,
                 edit.tool_use_id,
                 edit.tool_result_content_replacement,
             )
+
+        # Delete tool_use_info (system metadata)
+        tool_use_info_msg = tool_use_msgs.tool_use_info
+        if tool_use_info_msg is not None:
+            context.memory_manager.delete_message(tool_use_info_msg)
 
     @override
     async def on_session_complete(self, context: AnalectRunContext) -> None:
@@ -2573,7 +2398,7 @@ Tips to reach the threshold:
             if registry_entry.get("tool_name") == CONTEXT_EDIT_TOOL_NAME:
                 continue
             was_edited = tuid in edited_ids
-            was_ignored = tuid in self._ignored_tool_use_ids
+            was_rewritten = tuid in self._ignored_tool_use_ids
             tool_use_outcomes.append({
                 "tool_use_id": tuid,
                 "tool_name": registry_entry.get("tool_name", "unknown"),
@@ -2582,7 +2407,7 @@ Tips to reach the threshold:
                 "result_tokens": registry_entry.get("result_tokens", 0),
                 "image_count": registry_entry.get("image_count", 0),
                 "was_edited": was_edited,
-                "was_ignored": was_ignored,
+                "was_rewritten": was_rewritten,
             })
 
         # Collect token usage from the estimator
