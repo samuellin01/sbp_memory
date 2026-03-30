@@ -24,6 +24,8 @@ from ..token.utils import calculate_image_tokens_from_dimensions, get_image_dime
 from ...tags import Tag
 from .prompts import (
     AUTO_FORCE_MESSAGE_TEMPLATE,
+    COMPRESSION_AGENT_SYSTEM_PROMPT,
+    COMPRESSION_AGENT_USER_PROMPT_TEMPLATE,
     CONTEXT_EDIT_TOOL_NAME,
     CONTEXT_MANAGEMENT_ENFORCEMENT_MESSAGE,
     CONTEXT_MANAGEMENT_ENFORCEMENT_MESSAGE_TEMPLATE,
@@ -59,10 +61,17 @@ class ContextEdit(BaseModel):
 
     operation: ContextEditOperation = Field(
         description=(
-            "REWRITE: Rewrite tool result to save tokens. "
-            "Use selective omission for code/file content (keep relevant lines verbatim, bracket out the rest). "
-            "Use concise summary for command output (extract key result)."
+            "REWRITE: Compress tool result to save tokens. "
+            "A compression agent will handle the actual rewriting based on your guidance."
         )
+    )
+
+    guidance: str = Field(
+        default="",
+        description="Describe what content is relevant and should be kept, and what can be omitted. "
+        "Examples: 'Keep the edit function and delete function, omit everything else', "
+        "'Totally irrelevant — compress to one-liner', "
+        "'Keep chat-related error entries, omit all non-chat entries'",
     )
 
     tool_use_input_replacement: dict[str, Any] | None = Field(
@@ -70,8 +79,11 @@ class ContextEdit(BaseModel):
         description="Optional: replacement for verbose tool input (rarely needed since inputs are usually small)",
     )
 
-    tool_result_content_replacement: str = Field(
-        description="Rewritten tool result content. Ranges from a one-line annotation (least relevant) to selective omission preserving exact original lines (most relevant).",
+    # Filled by compression agent, not by the main agent
+    tool_result_content_replacement: str | None = Field(
+        default=None,
+        description="Compressed tool result content. Populated by the compression agent — do not fill this yourself.",
+        exclude=True,  # Exclude from JSON schema shown to the main agent
     )
 
     reason: str | None = Field(
@@ -275,6 +287,19 @@ class SmartContextManagementExtension(
         default=False,
         description="Whether to include cumulative context usage in system_info tags after tool use",
     )
+    compression_agent_enabled: bool = Field(
+        default=False,
+        description="Whether to use a separate compression agent for rewriting tool results. "
+        "When enabled, the main agent provides guidance and a compression agent handles the actual rewriting.",
+    )
+    compression_agent_model: str | None = Field(
+        default=None,
+        description="Model ID for the compression agent. If None, uses the same model as the main agent.",
+    )
+    compression_agent_max_tokens: int = Field(
+        default=16384,
+        description="Max tokens for compression agent responses.",
+    )
     training_data_dir: str | None = Field(
         default=None,
         description="Directory to write training data JSONL files (context_snapshots.jsonl, "
@@ -459,6 +484,16 @@ class SmartContextManagementExtension(
                     total += sum(token_lengths)
         return total
 
+    def _get_context_edit_schema(self) -> dict[str, Any]:
+        """Get JSON schema for ContextEditInput, excluding internal fields."""
+        schema = ContextEditInput.model_json_schema()
+        # Remove tool_result_content_replacement from ContextEdit schema —
+        # it's populated by the compression agent, not by the main agent
+        if "$defs" in schema and "ContextEdit" in schema["$defs"]:
+            props = schema["$defs"]["ContextEdit"].get("properties", {})
+            props.pop("tool_result_content_replacement", None)
+        return schema
+
     @override
     @property
     async def tools(self) -> list[ant.ToolLike]:
@@ -471,7 +506,7 @@ class SmartContextManagementExtension(
                     clear_at_least=self.clear_at_least,
                     enforce_clear_at_least=self.enforce_clear_at_least,
                 ),
-                input_schema=ContextEditInput.model_json_schema(),
+                input_schema=self._get_context_edit_schema(),
             )
         ]
 
@@ -1147,7 +1182,15 @@ class SmartContextManagementExtension(
         Returns:
             Tool result with success message
         """
-        stats, edit_items = await self._apply_edits(validation_result.valid_edits, context)
+        edits_to_apply = validation_result.valid_edits
+
+        # Run compression agents if enabled
+        if self.compression_agent_enabled:
+            edits_to_apply = await self._run_compression_agents(
+                edits_to_apply, context
+            )
+
+        stats, edit_items = await self._apply_edits(edits_to_apply, context)
         self._pending_data.clear()  # Clear pending on success
         self._continuous_edit_count = 0  # Reset counter on success
 
@@ -1341,6 +1384,7 @@ class SmartContextManagementExtension(
             edit = ContextEdit(
                 tool_use_id=tool_use_id,
                 operation=ContextEditOperation.REWRITE,
+                guidance="Totally irrelevant — compress to a one-liner",
                 tool_result_content_replacement=replacement,
                 reason="Auto-forced due to max continuous edits exceeded",
             )
@@ -1456,7 +1500,10 @@ class SmartContextManagementExtension(
         # If no more tool uses to force-rewrite, apply what we have
         if not forced_edits:
             # Apply pending edits even if below threshold - exit gracefully
-            stats, edit_items = await self._apply_edits(validation_result.valid_edits, context)
+            edits_to_apply = validation_result.valid_edits
+            if self.compression_agent_enabled:
+                edits_to_apply = await self._run_compression_agents(edits_to_apply, context)
+            stats, edit_items = await self._apply_edits(edits_to_apply, context)
             self._pending_data.clear()
             self._continuous_edit_count = 0
 
@@ -1507,6 +1554,13 @@ Applied {len(validation_result.valid_edits)} pending edit(s).
         await self._show_auto_force_notification(
             forced_edits, total_savings, pending_count, context
         )
+
+        # Run compression agents on pending edits (forced edits already have replacements)
+        if self.compression_agent_enabled:
+            compressed_pending = await self._run_compression_agents(
+                validation_result.valid_edits, context
+            )
+            all_edits = compressed_pending + forced_edits
 
         # Apply all edits
         stats, edit_items = await self._apply_edits(all_edits, context)
@@ -1924,9 +1978,9 @@ Tips to reach the threshold:
         tool_use_msgs = self._get_tool_use_messages(tool_use_id)
         savings = 0
 
-        # Tool result savings (always has replacement)
+        # Tool result savings
         tool_result = tool_use_msgs.tool_result
-        if tool_result is not None:
+        if tool_result is not None and edit.tool_result_content_replacement is not None:
             original_size = (await self.get_prompt_token_lengths([tool_result]))[0]
             temp_msg = CfMessage(
                 type=cf.MessageType.HUMAN,
@@ -2112,11 +2166,18 @@ Tips to reach the threshold:
             )
 
         # Check 2: Minimum savings (may pend)
-        (
-            estimated_savings,
-            should_pend,
-            edit_savings_map,
-        ) = await self._validate_minimum_savings(valid_edits, context)
+        # Skip savings validation when compression agent is enabled,
+        # since tool_result_content_replacement is not yet available
+        if self.compression_agent_enabled:
+            estimated_savings = 0
+            should_pend = False
+            edit_savings_map = {}
+        else:
+            (
+                estimated_savings,
+                should_pend,
+                edit_savings_map,
+            ) = await self._validate_minimum_savings(valid_edits, context)
 
         # If savings fails but should pend, return pending state
         if should_pend:
@@ -2152,6 +2213,118 @@ Tips to reach the threshold:
             edit_savings_map=edit_savings_map,
             replacement_info=filtered_replacement_info,
         )
+
+    def _extract_full_tool_result_content(
+        self, tool_use_id: str, tool_result_msg: CfMessage | None
+    ) -> str:
+        """Extract full tool result content as a string for the compression agent."""
+        if tool_result_msg is None or not isinstance(tool_result_msg.content, list):
+            return ""
+        for item in tool_result_msg.content:
+            try:
+                tr = ant.MessageContentToolResult.model_validate(item)
+                if tr.tool_use_id == tool_use_id:
+                    return self._extract_content_preview(tr.content)
+            except Exception:
+                continue
+        return ""
+
+    async def _run_compression_agent(
+        self,
+        original_content: str,
+        guidance: str,
+        token_count: int,
+        context: AnalectRunContext,
+    ) -> str:
+        """Run the compression agent on a single tool result.
+
+        Args:
+            original_content: The original tool result content to compress
+            guidance: The main agent's guidance on what to keep/omit
+            token_count: Estimated token count of the original content
+            context: Analect run context for LLM access
+
+        Returns:
+            Compressed content string
+        """
+        from ....core.llm_manager import LLMParams
+
+        user_message = COMPRESSION_AGENT_USER_PROMPT_TEMPLATE.format(
+            guidance=guidance,
+            content=original_content,
+            token_count=token_count,
+        )
+
+        messages = [
+            SystemMessage(content=COMPRESSION_AGENT_SYSTEM_PROMPT),
+            HumanMessage(content=user_message),
+        ]
+
+        params = LLMParams(
+            model=self.compression_agent_model,
+            max_tokens=self.compression_agent_max_tokens,
+            temperature=0.0,
+        )
+        chat = context.llm_manager._get_chat(params=params)
+        result = await chat.ainvoke(messages)
+        return result.content if isinstance(result.content, str) else str(result.content)
+
+    async def _run_compression_agents(
+        self,
+        edits: list[ContextEdit],
+        context: AnalectRunContext,
+    ) -> list[ContextEdit]:
+        """Run compression agents in parallel for all edits that need compression.
+
+        Args:
+            edits: List of edits with guidance from the main agent
+            context: Analect run context
+
+        Returns:
+            List of edits with tool_result_content_replacement filled in
+        """
+        async def compress_single(edit: ContextEdit) -> ContextEdit:
+            tool_use_msgs = self._get_tool_use_messages(edit.tool_use_id)
+            original_content = self._extract_full_tool_result_content(
+                edit.tool_use_id, tool_use_msgs.tool_result
+            )
+
+            if not original_content:
+                edit.tool_result_content_replacement = (
+                    f"[empty tool result for {edit.tool_use_id}]"
+                )
+                return edit
+
+            # Get token count from registry
+            registry_entry = self._tool_use_registry.get(edit.tool_use_id, {})
+            token_count = registry_entry.get("result_tokens", 0)
+
+            try:
+                compressed = await self._run_compression_agent(
+                    original_content=original_content,
+                    guidance=edit.guidance,
+                    token_count=token_count,
+                    context=context,
+                )
+                edit.tool_result_content_replacement = compressed
+            except Exception as e:
+                context_edit_logger.warning(
+                    "Compression agent failed for %s: %s",
+                    edit.tool_use_id,
+                    e,
+                )
+                # Fall back to a basic annotation
+                tool_name = registry_entry.get("tool_name", "unknown")
+                edit.tool_result_content_replacement = (
+                    f"[compression failed for {tool_name} tool use — {edit.guidance}]"
+                )
+            return edit
+
+        # Run all compression agents in parallel
+        compressed_edits = await asyncio.gather(
+            *[compress_single(edit) for edit in edits]
+        )
+        return list(compressed_edits)
 
     async def _apply_edits(
         self,
@@ -2202,8 +2375,10 @@ Tips to reach the threshold:
                 if edit.tool_use_input_replacement is not None
                 else "unchanged"
             )
-            new_result_preview = self._extract_content_preview(
-                edit.tool_result_content_replacement
+            new_result_preview = (
+                self._extract_content_preview(edit.tool_result_content_replacement)
+                if edit.tool_result_content_replacement is not None
+                else "unchanged"
             )
             await self._rewrite_tool_use_messages(tool_use_msgs, edit, context)
 
@@ -2365,7 +2540,7 @@ Tips to reach the threshold:
             self._ignored_tool_use_ids.add(edit.tool_use_id)
 
         tool_result = tool_use_msgs.tool_result
-        if tool_result is not None:
+        if tool_result is not None and edit.tool_result_content_replacement is not None:
             self._compact_tool_result(
                 tool_result,
                 edit.tool_use_id,
