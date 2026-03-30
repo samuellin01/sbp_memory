@@ -46,6 +46,7 @@ class SmartContextConfig:
     compression_threshold: Optional[int] = None  # maps to input_tokens_trigger
     clear_at_least: Optional[int] = None
     clear_at_least_tolerance: Optional[float] = None  # maps to enforce_clear_at_least_tolerance
+    enforce_clear_at_least: Optional[bool] = None
     reminder_enabled: Optional[bool] = None
     reminder_ratio: Optional[float] = None
     cache_min_prompt_length: Optional[int] = None
@@ -137,6 +138,10 @@ class CodeAssistEntry(Analect[EntryInput, EntryOutput], EntryAnalectMixin):
             if self.smart_context_config.clear_at_least_tolerance is not None:
                 smart_context_kwargs["enforce_clear_at_least_tolerance"] = (
                     self.smart_context_config.clear_at_least_tolerance
+                )
+            if self.smart_context_config.enforce_clear_at_least is not None:
+                smart_context_kwargs["enforce_clear_at_least"] = (
+                    self.smart_context_config.enforce_clear_at_least
                 )
             if self.smart_context_config.reminder_enabled is not None:
                 smart_context_kwargs["reminder_enabled"] = (
