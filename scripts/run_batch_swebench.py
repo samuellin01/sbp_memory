@@ -497,6 +497,17 @@ def extract_results(
         logger.info("[dry-run] Would extract results from container %s to %s", name, out_dir)
         return
 
+    # 0. List files in /app for debugging
+    try:
+        ls_result = run_cmd(
+            [runtime, "exec", name, "sh", "-c", "ls -la /app/*.json /app/*.jsonl 2>/dev/null || echo '(no json files)'"],
+            logger,
+            timeout=30,
+        )
+        logger.info("Files in /app: %s", ls_result.stdout.strip())
+    except Exception as e:
+        logger.warning("Could not list /app files: %s", e)
+
     # 1. patch.diff — use git show to get the committed patch
     try:
         result = run_cmd(
