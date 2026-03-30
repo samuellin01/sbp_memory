@@ -28,9 +28,8 @@ If you continue without optimizing context, you risk:
 - **Last resort exception:** If context is critically full and some skill_view results are clearly no longer relevant to the current task, they MAY be rewritten - but try all other options first
 
 **What to rewrite:**
-- Outdated exploratory work, superseded results, redundant/duplicate tool calls → rewrite to one-line annotations
-- Large file reads → keep only relevant lines, bracket out the rest with [lines N-M omitted: description]
-- Verbose command output → extract key result as a short summary
+- Results with relevant content → selective omission: keep exact relevant lines verbatim, bracket out the rest with [lines N-M omitted: description]
+- Totally irrelevant / outdated tool uses → one-line annotation
 - Keep: Recent tool uses relevant to current task (leave unchanged)
 
 ⚠️ **Common Mistake:** Do NOT rewrite dynamic context tool uses (e.g., `skill_view`) results even if they seem verbose - you will lose reference documentation you need.
@@ -57,42 +56,57 @@ def get_context_edit_tool_description(
 Use this tool when context usage is high (e.g., >50%-60% of context window) to optimize memory:
 - REWRITE: Rewrite tool results on a spectrum from minimal annotation to selective omission.
 
-**How to rewrite by tool type:**
+**How to rewrite — choose based on relevance:**
 
-For **file reads / code views** (str_replace_based_edit_tool, cat, etc.) — use **selective omission**:
-  IMPORTANT: Do NOT summarize or paraphrase code. Keep exact original lines verbatim for relevant sections. Use `[lines N-M omitted: description]` markers for irrelevant sections.
+**If the content has relevant parts you may need again** — use **selective omission**:
+  Keep exact original lines verbatim for relevant sections. Use `[lines N-M omitted: description]` markers for irrelevant sections. Be as granular as needed — you can have many alternating omit/keep sections:
 
-  Example — a 350-line file where only the function at lines 45-60 is relevant to the current task:
   ```
-  [lines 1-44 omitted: imports, config constants, logger setup]
+  [lines 1-14 omitted: imports and requires]
 
-  def process_payment(order_id, amount):
-      tx = db.begin_transaction()
-      try:
-          record = PaymentRecord(order_id=order_id, amount=amount)
-          tx.insert(record)
-          gateway.charge(record)
-          tx.commit()
-      except GatewayError as e:
-          tx.rollback()
-          raise PaymentFailed(order_id, e)
+  const callv3API = async (method, path, body, user) => {
+      // ...exact original lines...
+  };
 
-  [lines 61-350 omitted: refund_payment, list_transactions, generate_report, export_csv, admin helpers]
+  [lines 51-623 omitted: before/after hooks, canMessage tests, room creation/join/leave tests]
+
+  describe('edit/delete', () => {
+      it('should edit message', (done) => {
+          socketModules.chats.edit({ uid: mocks.users.foo.uid }, { mid: mid, roomId: roomId, message: 'message edited' }, (err) => {
+              assert.ifError(err);
+              // ...exact original lines...
+          });
+      });
+  });
+
+  [lines 699-798 omitted: delete/restore tests, disabled-via-ACP tests]
+
+  describe('controller', () => {
+      it('should 404 if chat is disabled', async () => {
+          // ...exact original lines...
+      });
+  });
+
+  [lines 833-895 omitted: logged-in chat controller tests]
   ```
 
-  The key rule: preserved lines are EXACT copies from the original — never paraphrase code. The omission markers briefly describe what was skipped.
+  Rules:
+  - Preserved lines are EXACT copies from the original — never paraphrase code or structured content
+  - You can have many alternating omit/keep sections (omit → keep → omit → keep → ...), not just one keep block
+  - The omission markers briefly describe what was skipped
+  - This applies to any tool result with relevant content: code files, diffs, error tracebacks, command output with structured data, etc.
+  - ⚠️ The larger the result, the MORE important selective omission is — don't fall back to prose for big files
+  - ❌ WRONG: "Viewed test/file.js (500 lines). Tests cover X, Y, Z. The edit function uses socket calls."
+  - ✅ RIGHT: `[lines 1-50 omitted: ...]` then exact code then `[lines 100-500 omitted: ...]`
 
-For **command output** (bash, terminal) — use **concise summary**:
-  Extract the key result:
-  - "Build succeeded. 142 tests passed, 0 failed."
-  - "ERROR: ModuleNotFoundError: No module named 'requests' (full traceback omitted)"
-  - "Found 3 matches: src/auth.py:45, src/auth.py:112, src/middleware.py:23"
-
-For **least relevant / outdated tool uses** — use **minimal annotation**:
+**If the content is totally irrelevant to the current task ** — use **minimal annotation**:
+  A one-line summary is fine when nothing in the result is worth preserving verbatim:
   - "Viewed /app/package.json — project config with express, jest deps. Not relevant to current task."
   - "Ran grep for 'TODO' — found 12 matches, none relevant."
+  - "Build succeeded. 142 tests passed, 0 failed."
+  - "Found 3 matches: src/auth.py:45, src/auth.py:112, src/middleware.py:23"
 
-**Prioritize older, outdated tool uses** for aggressive rewriting.
+**Prioritize older, outdated tool uses** for aggressive rewriting. Prioritize using selective omission over minimal annotation.
 Keep recent tool uses that are relevant to the current task.
 
 All tool uses not in the edit list will be kept unchanged.
@@ -143,9 +157,8 @@ You MUST use `{tool_name}` or memory tools now - all other tools are blocked.
 - **Last resort exception:** If context is critically full and some skill_view results are clearly no longer relevant to the current task, they MAY be rewritten - but try all other options first
 
 **What to rewrite:**
-- Outdated exploratory work, superseded results, redundant/duplicate tool calls → minimal one-line annotations
-- Large file reads → selective omission (keep relevant lines, bracket out the rest)
-- Verbose command output → concise summary of key result
+- Results with relevant content → selective omission: keep exact relevant lines verbatim, bracket out the rest with [lines N-M omitted: description]
+- Totally irrelevant / outdated tool uses → one-line annotation
 - Keep: Recent tool uses relevant to current task
 
 ⚠️ **Common Mistake:** Do NOT rewrite dynamic context tool uses (e.g., `skill_view`) results even if they seem verbose - you will lose reference documentation you need.
