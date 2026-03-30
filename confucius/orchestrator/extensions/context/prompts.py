@@ -102,8 +102,10 @@ Use this tool when context usage is high (e.g., >50%-60% of context window) to o
   - "Build succeeded. 142 tests passed, 0 failed."
   - "Found 3 matches: src/auth.py:45, src/auth.py:112, src/middleware.py:23"
 
-**Prioritize older, outdated tool uses** for aggressive rewriting. Prioritize using selective omission over minimal annotation.
-Keep recent tool uses that are relevant to the current task.
+**Key principles:**
+- **Bias toward keeping**: Your instinct may be to summarize — resist it. Default to keeping original content. Only omit lines you are confident are irrelevant. When in doubt, keep.
+- **Breadth over depth**: Prefer trimming a little from many tool results over aggressively compressing a few. Light selective omission across 10 results preserves more useful context than summarizing 3 results into one-liners.
+- **Prioritize older, outdated tool uses** for rewriting. Keep recent tool uses relevant to the current task.
 
 All tool uses not in the edit list will be kept unchanged.
 
