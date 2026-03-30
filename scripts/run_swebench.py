@@ -109,6 +109,30 @@ def main() -> None:
         "Only used when --enable-context-usage is set.",
     )
 
+    # Compression agent configuration
+    parser.add_argument(
+        "--enable-compression-agent",
+        action="store_true",
+        default=False,
+        help="Enable the two-agent compression architecture. The main agent provides guidance "
+        "on what to keep/omit, and a separate compression agent handles the actual rewriting. "
+        "Only used when --enable-smart-context is set.",
+    )
+    parser.add_argument(
+        "--compression-agent-model",
+        type=str,
+        default=None,
+        help="Model ID for the compression agent (default: same as main agent). "
+        "Only used when --enable-compression-agent is set.",
+    )
+    parser.add_argument(
+        "--compression-agent-max-tokens",
+        type=int,
+        default=None,
+        help="Max tokens for compression agent responses (default 16384). "
+        "Only used when --enable-compression-agent is set.",
+    )
+
     # Cache configuration (available regardless of smart context)
     parser.add_argument(
         "--cache-min-prompt-length",
@@ -214,6 +238,12 @@ Plz make sure you commit your change at the end, otherwise I won't be able to ex
             print("  - context_usage: ENABLED")
             if args.context_window_size is not None:
                 print(f"  - context_window_size: {args.context_window_size}")
+        if args.enable_compression_agent:
+            print("  - compression_agent: ENABLED")
+            if args.compression_agent_model is not None:
+                print(f"  - compression_agent_model: {args.compression_agent_model}")
+            if args.compression_agent_max_tokens is not None:
+                print(f"  - compression_agent_max_tokens: {args.compression_agent_max_tokens}")
     else:
         print("SmartContextManagementExtension is DISABLED (default)")
         print("  - Anthropic caching: ON")
@@ -244,6 +274,9 @@ Plz make sure you commit your change at the end, otherwise I won't be able to ex
                 context_edit_log_dir=args.context_edit_log_dir,
                 smart_context_enable_context_usage=args.enable_context_usage,
                 smart_context_context_window_size=args.context_window_size,
+                compression_agent_enabled=args.enable_compression_agent,
+                compression_agent_model=args.compression_agent_model,
+                compression_agent_max_tokens=args.compression_agent_max_tokens,
             )
         )
         print("Agent completed successfully")
