@@ -60,16 +60,27 @@ Use this tool when context usage is high (e.g., >50%-60% of context window) to o
 **How to rewrite by tool type:**
 
 For **file reads / code views** (str_replace_based_edit_tool, cat, etc.) — use **selective omission**:
-  Keep exact original lines that are relevant, bracket out the rest:
-  ```
-  [lines 1-45 omitted: imports and test config]
+  IMPORTANT: Do NOT summarize or paraphrase code. Keep exact original lines verbatim for relevant sections. Use `[lines N-M omitted: description]` markers for irrelevant sections.
 
-  def handle_reconnect(self, client):
-      if client.state == DISCONNECTED:
-          self._retry(client, max_attempts=3)
-
-  [lines 85-400 omitted: unrelated handler methods]
+  Example — a 350-line file where only the function at lines 45-60 is relevant to the current task:
   ```
+  [lines 1-44 omitted: imports, config constants, logger setup]
+
+  def process_payment(order_id, amount):
+      tx = db.begin_transaction()
+      try:
+          record = PaymentRecord(order_id=order_id, amount=amount)
+          tx.insert(record)
+          gateway.charge(record)
+          tx.commit()
+      except GatewayError as e:
+          tx.rollback()
+          raise PaymentFailed(order_id, e)
+
+  [lines 61-350 omitted: refund_payment, list_transactions, generate_report, export_csv, admin helpers]
+  ```
+
+  The key rule: preserved lines are EXACT copies from the original — never paraphrase code. The omission markers briefly describe what was skipped.
 
 For **command output** (bash, terminal) — use **concise summary**:
   Extract the key result:
