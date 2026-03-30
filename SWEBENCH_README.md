@@ -26,7 +26,7 @@ Two experiment configurations are run by default (A/B):
 | Config | Description |
 |---|---|
 | `no_compression` | Runs the agent with default settings (no smart context) |
-| `smart_context` | Runs the agent with `--enable-smart-context` and configurable thresholds |
+| `smart_context` | Runs the agent with `--enable-smart-context`, `--disable-reminder`, and configurable thresholds |
 
 ---
 
@@ -65,6 +65,7 @@ For each `(instance_id, config)` pair the script:
    - Copies `app.pex` to `/usr/local/bin/`.
 4. **Writes the prompt** to `/tmp/task.txt` inside the running container via `podman exec`.
 5. **Runs the agent** via `podman exec -w /app … python /usr/local/bin/app.pex --prompt /tmp/task.txt --cache-min-prompt-length 0 --verbose [flags]`.
+   For the `smart_context` config the additional flags `--enable-smart-context --disable-reminder --compression-threshold … --clear-at-least … --clear-at-least-tolerance … --context-edit-log-dir /app` (and optionally `--disable-enforcement`, `--enable-context-usage`, and `--context-window-size`) are also passed.
 6. **Extracts result artifacts** from the container:
    - `patch.diff` — committed changes via `git show --format= --no-color`
    - `logs.txt` — agent log at `/app/logs.txt`
@@ -211,6 +212,9 @@ python scripts/run_batch_swebench.py \
 | `--github_results_repo` | `samuellin01/memory_experiments` | Target GitHub repo (`owner/name`) to upload results to |
 | `--github_results_path` | `sbp` | Base folder in the target GitHub repo; results land at `{github_results_path}/` |
 | `--skip_github_upload` | `false` | Skip uploading results to GitHub after the run |
+| `--disable_enforcement` | `false` | Disable enforcement of the `clear_at_least` threshold (smart_context only). When set, edits are applied immediately without accumulation. Passed as `--disable-enforcement` to the agent. |
+| `--enable_context_usage` | `false` | Include cumulative context usage in `system_info` tags (smart_context only). Passed as `--enable-context-usage` to the agent. |
+| `--context_window_size` | `None` | Total context window size in tokens for usage percentage calculation. Only used when `--enable_context_usage` is set. When not provided, the agent uses its own default (200000). Passed as `--context-window-size` to the agent. |
 
 ---
 
@@ -261,6 +265,21 @@ python scripts/run_batch_swebench.py \
   --compression_threshold 80000 \
   --clear_at_least 40000 \
   --clear_at_least_tolerance 0.75
+```
+
+### Disable enforcement of the clear_at_least threshold
+```bash
+python scripts/run_batch_swebench.py \
+  --configs smart_context \
+  --disable_enforcement
+```
+
+### Enable context usage tracking
+```bash
+python scripts/run_batch_swebench.py \
+  --configs smart_context \
+  --enable_context_usage \
+  --context_window_size 200000
 ```
 
 ### Custom data directory and image registry
