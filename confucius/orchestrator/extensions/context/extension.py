@@ -2271,6 +2271,7 @@ Tips to reach the threshold:
             model=model,
             max_tokens=self.compression_agent_max_tokens,
             temperature=0.0,
+            top_p=None,
         )
         chat = context.llm_manager._get_chat(params=params)
         result = await chat.ainvoke(messages)
