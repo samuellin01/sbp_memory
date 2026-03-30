@@ -99,6 +99,9 @@ def build_agent_flags(
     disable_enforcement: bool = False,
     enable_context_usage: bool = False,
     context_window_size: Optional[int] = None,
+    enable_compression_agent: bool = False,
+    compression_agent_model: Optional[str] = None,
+    compression_agent_max_tokens: Optional[int] = None,
 ) -> list[str]:
     """Return the CLI flags to pass to the agent for the given experiment config."""
     if config == CONFIG_SMART_CONTEXT:
@@ -117,6 +120,12 @@ def build_agent_flags(
             flags.append("--enable-context-usage")
             if context_window_size is not None:
                 flags.extend(["--context-window-size", str(context_window_size)])
+        if enable_compression_agent:
+            flags.append("--enable-compression-agent")
+            if compression_agent_model is not None:
+                flags.extend(["--compression-agent-model", compression_agent_model])
+            if compression_agent_max_tokens is not None:
+                flags.extend(["--compression-agent-max-tokens", str(compression_agent_max_tokens)])
         return flags
     # no_compression — minimal flags
     return ["--cache-min-prompt-length", "0"]
@@ -625,6 +634,9 @@ def run_problem(
         args.disable_enforcement,
         args.enable_context_usage,
         args.context_window_size,
+        args.enable_compression_agent,
+        args.compression_agent_model,
+        args.compression_agent_max_tokens,
     )
 
     logger.info(
@@ -1054,6 +1066,27 @@ def parse_args() -> argparse.Namespace:
         help="Total context window size in tokens for usage percentage. Default: 200000",
     )
 
+    # Compression agent
+    parser.add_argument(
+        "--enable_compression_agent",
+        action="store_true",
+        default=False,
+        help="Enable the two-agent compression architecture. "
+        "Main agent provides guidance, compression agent handles rewriting.",
+    )
+    parser.add_argument(
+        "--compression_agent_model",
+        type=str,
+        default=None,
+        help="Model ID for the compression agent (default: same as main agent).",
+    )
+    parser.add_argument(
+        "--compression_agent_max_tokens",
+        type=int,
+        default=None,
+        help="Max tokens for compression agent responses (default 16384).",
+    )
+
     # Container / agent
     parser.add_argument(
         "--pex_path",
@@ -1080,10 +1113,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--data_dir",
         type=str,
-        default=os.path.expanduser("~/workspace/sbp_memory"),
+        default=os.path.expanduser("~/workspace/cf_memory"),
         help=(
             "Host path mounted as /data inside the container (supplies cf_env.tar.gz and app.pex). "
-            "Default: ~/workspace/sbp_memory"
+            "Default: ~/workspace/cf_memory"
         ),
     )
     parser.add_argument(
@@ -1209,6 +1242,12 @@ def main() -> None:
         logger.info("  enable_context_usage:    %s", args.enable_context_usage)
         if args.enable_context_usage and args.context_window_size is not None:
             logger.info("  context_window_size:     %d", args.context_window_size)
+        if args.enable_compression_agent:
+            logger.info("  compression_agent:       ENABLED")
+            if args.compression_agent_model is not None:
+                logger.info("  compression_agent_model: %s", args.compression_agent_model)
+            if args.compression_agent_max_tokens is not None:
+                logger.info("  compression_agent_max_tokens: %d", args.compression_agent_max_tokens)
 
     # Load problems
     if not args.problems_file.exists():
