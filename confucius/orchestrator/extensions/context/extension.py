@@ -2260,8 +2260,10 @@ Tips to reach the threshold:
             HumanMessage(content=user_message),
         ]
 
+        # Use specified model, or inherit the current model from the LLM manager
+        model = self.compression_agent_model or context.llm_manager.llm_params.model
         params = LLMParams(
-            model=self.compression_agent_model,
+            model=model,
             max_tokens=self.compression_agent_max_tokens,
             temperature=0.0,
         )
