@@ -528,8 +528,8 @@ def extract_results(
     # 2. logs.txt
     _podman_cp("/app/logs.txt", "logs.txt")
 
-    # 2b. context_edits.jsonl — context edit log (if smart context was used)
-    _podman_cp("/app/context_edits.jsonl", "context_edits.jsonl")
+    # 2b. context_edits.json — context edit log (if smart context was used)
+    _podman_cp("/app/context_edits.json", "context_edits.json")
 
     # 3. traj_*.json — list matching files inside the container then copy each
     try:
@@ -548,6 +548,9 @@ def extract_results(
 
     # 4. token_usage.json
     _podman_cp("/app/token_usage.json", "token_usage.json")
+
+    # 5. token_usage_subagent.json — compression agent token usage
+    _podman_cp("/app/token_usage_subagent.json", "token_usage_subagent.json")
 
 
 # ---------------------------------------------------------------------------
