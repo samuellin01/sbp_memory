@@ -16,6 +16,7 @@ async def run_agent_with_prompt(
     smart_context_compression_threshold: Optional[int] = None,
     smart_context_clear_at_least: Optional[int] = None,
     smart_context_clear_at_least_tolerance: Optional[float] = None,
+    smart_context_enforce_clear_at_least: Optional[bool] = None,
     smart_context_reminder_enabled: Optional[bool] = None,
     smart_context_reminder_ratio: Optional[float] = None,
     cache_min_prompt_length: Optional[int] = None,
@@ -39,6 +40,8 @@ async def run_agent_with_prompt(
             edit to justify the operation
         smart_context_clear_at_least_tolerance: Tolerance for enforcing the
             clear_at_least threshold (default 0.75)
+        smart_context_enforce_clear_at_least: Whether to enforce the clear_at_least
+            threshold by accumulating edits until met (default True)
         smart_context_reminder_enabled: Whether to inject the soft reminder
             SystemMessage when approaching the trigger threshold
         smart_context_reminder_ratio: Ratio of input_tokens_trigger at which to
@@ -65,6 +68,7 @@ async def run_agent_with_prompt(
                 compression_threshold=smart_context_compression_threshold,
                 clear_at_least=smart_context_clear_at_least,
                 clear_at_least_tolerance=smart_context_clear_at_least_tolerance,
+                enforce_clear_at_least=smart_context_enforce_clear_at_least,
                 reminder_enabled=smart_context_reminder_enabled,
                 reminder_ratio=smart_context_reminder_ratio,
                 cache_min_prompt_length=cache_min_prompt_length,
