@@ -54,6 +54,9 @@ class SmartContextConfig:
     log_dir: Optional[str] = None
     enable_context_usage: bool = False
     context_window_size: Optional[int] = None
+    compression_agent_enabled: bool = False
+    compression_agent_model: Optional[str] = None
+    compression_agent_max_tokens: Optional[int] = None
 
 
 @public
@@ -157,6 +160,16 @@ class CodeAssistEntry(Analect[EntryInput, EntryOutput], EntryAnalectMixin):
                 smart_context_kwargs["enable_context_usage"] = True
             if self.smart_context_config.context_window_size is not None:
                 smart_context_kwargs["context_window_size"] = self.smart_context_config.context_window_size
+            if self.smart_context_config.compression_agent_enabled:
+                smart_context_kwargs["compression_agent_enabled"] = True
+            if self.smart_context_config.compression_agent_model is not None:
+                smart_context_kwargs["compression_agent_model"] = (
+                    self.smart_context_config.compression_agent_model
+                )
+            if self.smart_context_config.compression_agent_max_tokens is not None:
+                smart_context_kwargs["compression_agent_max_tokens"] = (
+                    self.smart_context_config.compression_agent_max_tokens
+                )
 
             extensions.append(SmartContextManagementExtension(**smart_context_kwargs))
             extensions.append(AnthropicPromptCaching(**build_cache_kwargs()))
