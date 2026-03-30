@@ -96,7 +96,6 @@ def build_agent_flags(
     compression_threshold: int,
     clear_at_least: int,
     clear_at_least_tolerance: float,
-    disable_enforcement: bool = False,
     enable_context_usage: bool = False,
     context_window_size: Optional[int] = None,
     enable_compression_agent: bool = False,
@@ -113,7 +112,6 @@ def build_agent_flags(
             "--compression-threshold", str(compression_threshold),
             "--clear-at-least", str(clear_at_least),
             "--clear-at-least-tolerance", str(clear_at_least_tolerance),
-            *(["--disable-enforcement"] if disable_enforcement else []),
             "--context-edit-log-dir", "/app",
         ]
         if enable_context_usage:
@@ -631,7 +629,6 @@ def run_problem(
         args.compression_threshold,
         args.clear_at_least,
         args.clear_at_least_tolerance,
-        args.disable_enforcement,
         args.enable_context_usage,
         args.context_window_size,
         args.enable_compression_agent,
@@ -1047,13 +1044,6 @@ def parse_args() -> argparse.Namespace:
         help="Tolerance for clear-at-least compression. Default: 0.75",
     )
     parser.add_argument(
-        "--disable_enforcement",
-        action="store_true",
-        default=False,
-        help="Disable enforcement of clear_at_least threshold. "
-        "Edits are applied immediately without accumulation.",
-    )
-    parser.add_argument(
         "--enable_context_usage",
         action="store_true",
         default=False,
@@ -1238,7 +1228,6 @@ def main() -> None:
         logger.info("  compression_threshold:   %d", args.compression_threshold)
         logger.info("  clear_at_least:          %d", args.clear_at_least)
         logger.info("  clear_at_least_tolerance: %s", args.clear_at_least_tolerance)
-        logger.info("  disable_enforcement:     %s", args.disable_enforcement)
         logger.info("  enable_context_usage:    %s", args.enable_context_usage)
         if args.enable_context_usage and args.context_window_size is not None:
             logger.info("  context_window_size:     %d", args.context_window_size)
