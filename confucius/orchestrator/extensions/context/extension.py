@@ -314,6 +314,7 @@ class SmartContextManagementExtension(
     _compressible_tokens: int | None = PrivateAttr(default=None)
     _continuous_edit_count: int = PrivateAttr(default=0)
     _enforce_mode: bool = PrivateAttr(default=False)
+    _current_model: str | None = PrivateAttr(default=None)
     # Training data collection state
     _turn_counter: int = PrivateAttr(default=0)
     # Registry of all tool uses: tool_use_id -> metadata
@@ -522,6 +523,10 @@ class SmartContextManagementExtension(
             messages,
             llm_params,
         ) = await super().on_invoke_llm_with_params(messages, llm_params, context)
+
+        # Capture the current model for compression agent fallback
+        if llm_params.model is not None:
+            self._current_model = llm_params.model
 
         prompt_lengths = await self.get_prompt_token_lengths(
             messages, tools=(llm_params.additional_kwargs or {}).get("tools")
@@ -2260,8 +2265,8 @@ Tips to reach the threshold:
             HumanMessage(content=user_message),
         ]
 
-        # Use specified model, or inherit the current model from the LLM manager
-        model = self.compression_agent_model or context.llm_manager.llm_params.model
+        # Use specified model, or inherit the model from the main agent
+        model = self.compression_agent_model or self._current_model
         params = LLMParams(
             model=model,
             max_tokens=self.compression_agent_max_tokens,
