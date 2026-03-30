@@ -62,32 +62,28 @@ Use this tool when context usage is high (e.g., >50%-60% of context window) to o
   Keep exact original lines verbatim for relevant sections. Use `[lines N-M omitted: description]` markers for irrelevant sections. Be as granular as needed — you can have many alternating omit/keep sections:
 
   ```
-  [lines 1-14 omitted: imports and requires]
+  [lines 1-44 omitted: imports, config constants, logger setup]
 
-  const callv3API = async (method, path, body, user) => {
-      // ...exact original lines...
-  };
+  def process_payment(order_id, amount):
+      tx = db.begin_transaction()
+      try:
+          record = PaymentRecord(order_id=order_id, amount=amount)
+          tx.insert(record)
+          gateway.charge(record)
+          tx.commit()
+      except GatewayError as e:
+          tx.rollback()
+          raise PaymentFailed(order_id, e)
 
-  [lines 51-623 omitted: before/after hooks, canMessage tests, room creation/join/leave tests]
+  [lines 61-120 omitted: refund_payment, list_transactions]
 
-  describe('edit/delete', () => {
-      it('should edit message', (done) => {
-          socketModules.chats.edit({ uid: mocks.users.foo.uid }, { mid: mid, roomId: roomId, message: 'message edited' }, (err) => {
-              assert.ifError(err);
-              // ...exact original lines...
-          });
-      });
-  });
+  def generate_report(start_date, end_date):
+      transactions = db.query(Transaction).filter(
+          Transaction.date.between(start_date, end_date)
+      ).all()
+      return ReportBuilder(transactions).build()
 
-  [lines 699-798 omitted: delete/restore tests, disabled-via-ACP tests]
-
-  describe('controller', () => {
-      it('should 404 if chat is disabled', async () => {
-          // ...exact original lines...
-      });
-  });
-
-  [lines 833-895 omitted: logged-in chat controller tests]
+  [lines 140-350 omitted: export_csv, admin helpers, CLI commands]
   ```
 
   Rules:
@@ -99,7 +95,7 @@ Use this tool when context usage is high (e.g., >50%-60% of context window) to o
   - ❌ WRONG: "Viewed test/file.js (500 lines). Tests cover X, Y, Z. The edit function uses socket calls."
   - ✅ RIGHT: `[lines 1-50 omitted: ...]` then exact code then `[lines 100-500 omitted: ...]`
 
-**If the content is totally irrelevant to the current task ** — use **minimal annotation**:
+**If the content is totally irrelevant to the current task** — use **minimal annotation**:
   A one-line summary is fine when nothing in the result is worth preserving verbatim:
   - "Viewed /app/package.json — project config with express, jest deps. Not relevant to current task."
   - "Ran grep for 'TODO' — found 12 matches, none relevant."
