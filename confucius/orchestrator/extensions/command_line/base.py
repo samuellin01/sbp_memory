@@ -113,9 +113,9 @@ class CommandLineExtension(TagWithIDExtension, ToolUseExtension):
                         Tag(
                             name="command",
                             attributes={"name": name},
-                            contents=desc,
+                            contents=cmd_desc,
                         )
-                        for name, desc in self.allowed_commands.items()
+                        for name, cmd_desc in self.allowed_commands.items()
                     ],
                 )
             )
