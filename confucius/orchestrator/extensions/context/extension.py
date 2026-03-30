@@ -17,7 +17,7 @@ from ....core.memory import CfMessage
 from ....core.llm_manager import LLMParams
 from ...exceptions import OrchestratorInterruption
 from ...base import BaseOrchestrator
-from ..token.estimator import TokenEstimatorExtension
+from ..token.estimator import TokenEstimatorExtension, MODEL_PRICING, DEFAULT_PRICING_MODEL
 from ..tool_use import ToolUseExtension, ToolUseObserver
 from ..caching.base import BasePromptCaching, CACHE_BREAKPOINT_KEY
 from ..token.utils import calculate_image_tokens_from_dimensions, get_image_dimensions_from_block
@@ -315,6 +315,7 @@ class SmartContextManagementExtension(
     _continuous_edit_count: int = PrivateAttr(default=0)
     _enforce_mode: bool = PrivateAttr(default=False)
     _current_model: str | None = PrivateAttr(default=None)
+    _compression_agent_usage: list[dict[str, Any]] = PrivateAttr(default_factory=list)
     # Training data collection state
     _turn_counter: int = PrivateAttr(default=0)
     # Registry of all tool uses: tool_use_id -> metadata
@@ -2275,6 +2276,19 @@ Tips to reach the threshold:
         )
         chat = context.llm_manager._get_chat(params=params)
         result = await chat.ainvoke(messages)
+
+        # Capture compression agent token usage
+        try:
+            metadata = result.response_metadata or {}
+            usage = metadata.get("usage", {})
+            self._compression_agent_usage.append({
+                "model": model,
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+            })
+        except Exception:
+            pass
+
         return result.content if isinstance(result.content, str) else str(result.content)
 
     async def _run_compression_agents(
@@ -2401,6 +2415,7 @@ Tips to reach the threshold:
                 "tool_use_id": tool_use_id,
                 "tool_name": tool_name,
                 "operation": edit.operation.value,
+                "guidance": edit.guidance,
                 "reason": edit.reason,
                 "original_tool_use_input": original_input_preview,
                 "original_tool_result_content": original_result_preview,
@@ -2565,6 +2580,35 @@ Tips to reach the threshold:
         """Write token usage and session-end training data with outcome annotations."""
         # Always call super to write token_usage.json
         await super().on_session_complete(context)
+
+        # Write compression agent costs to separate file
+        if self._compression_agent_usage:
+            total_input = sum(u["input_tokens"] for u in self._compression_agent_usage)
+            total_output = sum(u["output_tokens"] for u in self._compression_agent_usage)
+
+            # Compute monetary cost using same pricing as main agent
+            pricing = MODEL_PRICING.get(self.pricing_model, MODEL_PRICING[DEFAULT_PRICING_MODEL])
+            tokens_per_million = 1_000_000
+            # Subagent calls are never cached — all input is uncached
+            total_input_cost_usd = total_input * pricing["input"] / tokens_per_million
+            total_output_cost_usd = total_output * pricing["output"] / tokens_per_million
+            total_cost_usd = total_input_cost_usd + total_output_cost_usd
+
+            subagent_data = {
+                "num_calls": len(self._compression_agent_usage),
+                "total_input_tokens": total_input,
+                "total_output_tokens": total_output,
+                "pricing_model": self.pricing_model,
+                "total_input_cost_usd": total_input_cost_usd,
+                "total_output_cost_usd": total_output_cost_usd,
+                "total_cost_usd": total_cost_usd,
+                "per_call": self._compression_agent_usage,
+            }
+            try:
+                with open("token_usage_subagent.json", "w") as f:
+                    json.dump(subagent_data, f, indent=2)
+            except Exception as e:
+                context_edit_logger.warning("Failed to write token_usage_subagent.json: %s", e)
 
         if self.training_data_dir is None:
             return
