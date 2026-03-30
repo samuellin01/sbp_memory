@@ -24,6 +24,9 @@ async def run_agent_with_prompt(
     context_edit_log_dir: Optional[str] = None,
     smart_context_enable_context_usage: bool = False,
     smart_context_context_window_size: Optional[int] = None,
+    compression_agent_enabled: bool = False,
+    compression_agent_model: Optional[str] = None,
+    compression_agent_max_tokens: Optional[int] = None,
 ) -> None:
     """
     Run the Confucius Code agent with a given prompt and wait for completion.
@@ -76,6 +79,9 @@ async def run_agent_with_prompt(
                 log_dir=context_edit_log_dir,
                 enable_context_usage=smart_context_enable_context_usage,
                 context_window_size=smart_context_context_window_size,
+                compression_agent_enabled=compression_agent_enabled,
+                compression_agent_model=compression_agent_model,
+                compression_agent_max_tokens=compression_agent_max_tokens,
             )
             code_entry = CodeAssistEntry(smart_context_config=smart_context_config)
             await cf.invoke_analect(code_entry, EntryInput(question=prompt))
