@@ -64,14 +64,6 @@ def main() -> None:
         "Only used when --enable-smart-context is set.",
     )
     parser.add_argument(
-        "--disable-enforcement",
-        action="store_true",
-        default=False,
-        help="Disable enforcement of the clear_at_least threshold. "
-        "When disabled, edits are applied immediately without accumulation. "
-        "Only used when --enable-smart-context is set.",
-    )
-    parser.add_argument(
         "--disable-reminder",
         action="store_true",
         default=False,
@@ -266,7 +258,6 @@ Plz make sure you commit your change at the end, otherwise I won't be able to ex
                 smart_context_compression_threshold=args.compression_threshold,
                 smart_context_clear_at_least=args.clear_at_least,
                 smart_context_clear_at_least_tolerance=args.clear_at_least_tolerance,
-                smart_context_enforce_clear_at_least=False if args.disable_enforcement else None,
                 smart_context_reminder_enabled=False if args.disable_reminder else None,
                 smart_context_reminder_ratio=args.reminder_ratio,
                 cache_min_prompt_length=args.cache_min_prompt_length,
