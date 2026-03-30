@@ -82,7 +82,7 @@ def config_dir_name(config: str, args: argparse.Namespace) -> str:
     each other, e.g. ``smart_context_50000_20000``.
     """
     if config == CONFIG_SMART_CONTEXT:
-        return f"smart_context_{args.compression_threshold}_{args.clear_at_least}"
+        return f"smart_context_v2_{args.compression_threshold}_{args.clear_at_least}"
     return config
 
 
