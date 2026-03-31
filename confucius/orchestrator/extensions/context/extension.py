@@ -2316,7 +2316,23 @@ Tips to reach the threshold:
         except Exception:
             pass
 
-        raw_output = result.content if isinstance(result.content, str) else str(result.content)
+        # Extract text from the response — content may be a plain string
+        # or a list of content blocks (e.g. [{'type': 'text', 'text': '...'}])
+        raw_content = result.content
+        if isinstance(raw_content, str):
+            raw_output = raw_content
+        elif isinstance(raw_content, list):
+            parts: list[str] = []
+            for block in raw_content:
+                if isinstance(block, str):
+                    parts.append(block)
+                elif hasattr(block, "text"):
+                    parts.append(block.text)
+                elif isinstance(block, dict) and "text" in block:
+                    parts.append(str(block["text"]))
+            raw_output = "\n".join(parts)
+        else:
+            raw_output = str(raw_content)
 
         # Parse edit instructions and apply them to the original content
         parse_result = parse_edit_instructions(raw_output)
