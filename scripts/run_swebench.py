@@ -125,6 +125,16 @@ def main() -> None:
         "Only used when --enable-compression-agent is set.",
     )
 
+    # Compression cooldown
+    parser.add_argument(
+        "--compression-cooldown-tokens",
+        type=int,
+        default=None,
+        help="After compression, raise the effective trigger to tokens_after + this value. "
+        "Prevents tight re-trigger loops after weak compressions. 0 preserves default behavior. "
+        "Only used when --enable-smart-context is set.",
+    )
+
     # Cache configuration (available regardless of smart context)
     parser.add_argument(
         "--cache-min-prompt-length",
@@ -230,6 +240,8 @@ Plz make sure you commit your change at the end, otherwise I won't be able to ex
             print("  - context_usage: ENABLED")
             if args.context_window_size is not None:
                 print(f"  - context_window_size: {args.context_window_size}")
+        if args.compression_cooldown_tokens is not None:
+            print(f"  - compression_cooldown_tokens: {args.compression_cooldown_tokens}")
         if args.enable_compression_agent:
             print("  - compression_agent: ENABLED")
             if args.compression_agent_model is not None:
@@ -268,6 +280,7 @@ Plz make sure you commit your change at the end, otherwise I won't be able to ex
                 compression_agent_enabled=args.enable_compression_agent,
                 compression_agent_model=args.compression_agent_model,
                 compression_agent_max_tokens=args.compression_agent_max_tokens,
+                compression_cooldown_tokens=args.compression_cooldown_tokens,
             )
         )
         print("Agent completed successfully")
