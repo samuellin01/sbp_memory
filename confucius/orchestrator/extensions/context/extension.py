@@ -32,6 +32,10 @@ from .prompts import (
     CONTEXT_MANAGEMENT_REMINDER_MESSAGE_TEMPLATE,
     get_context_edit_tool_description,
 )
+from .utils.edit_instructions import (
+    apply_edit_instructions,
+    parse_edit_instructions,
+)
 from .utils.turn_merge import merge_fully_ignored_turns
 
 context_edit_logger = logging.getLogger("desktopenv.context_edit")
@@ -2234,6 +2238,22 @@ Tips to reach the threshold:
                 continue
         return ""
 
+    @staticmethod
+    def _add_line_numbers(content: str) -> str:
+        """Add 1-based line numbers to content for the compression agent.
+
+        Args:
+            content: Raw content string.
+
+        Returns:
+            Content with each line prefixed by its line number.
+        """
+        lines = content.splitlines()
+        width = len(str(len(lines)))
+        return "\n".join(
+            f"{i + 1:>{width}}: {line}" for i, line in enumerate(lines)
+        )
+
     async def _run_compression_agent(
         self,
         original_content: str,
@@ -2243,6 +2263,11 @@ Tips to reach the threshold:
     ) -> str:
         """Run the compression agent on a single tool result.
 
+        The agent outputs structured edit instructions (DELETE/REPLACE/SUMMARY)
+        instead of a full rewrite. This keeps the agent's output token count
+        proportional to the amount of *change*, not the amount of retained
+        content, avoiding the short-output bias that causes over-compression.
+
         Args:
             original_content: The original tool result content to compress
             guidance: The main agent's guidance on what to keep/omit
@@ -2250,13 +2275,16 @@ Tips to reach the threshold:
             context: Analect run context for LLM access
 
         Returns:
-            Compressed content string
+            Compressed content string (after applying edit instructions)
         """
         from ....core.llm_manager import LLMParams
 
+        # Send line-numbered content so the agent can reference exact ranges
+        numbered_content = self._add_line_numbers(original_content)
+
         user_message = COMPRESSION_AGENT_USER_PROMPT_TEMPLATE.format(
             guidance=guidance,
-            content=original_content,
+            content=numbered_content,
             token_count=token_count,
         )
 
@@ -2288,7 +2316,33 @@ Tips to reach the threshold:
         except Exception:
             pass
 
-        return result.content if isinstance(result.content, str) else str(result.content)
+        raw_output = result.content if isinstance(result.content, str) else str(result.content)
+
+        # Parse edit instructions and apply them to the original content
+        parse_result = parse_edit_instructions(raw_output)
+
+        if parse_result.errors:
+            context_edit_logger.warning(
+                "Compression agent parse errors: %s", parse_result.errors
+            )
+
+        if not parse_result.ops:
+            # No valid instructions parsed — fall back to raw output
+            # (handles edge cases where the agent outputs plain text)
+            context_edit_logger.warning(
+                "No edit instructions parsed from compression agent output, "
+                "falling back to raw output"
+            )
+            return raw_output
+
+        try:
+            return apply_edit_instructions(original_content, parse_result.ops)
+        except ValueError as e:
+            context_edit_logger.warning(
+                "Failed to apply edit instructions: %s — falling back to raw output",
+                e,
+            )
+            return raw_output
 
     async def _run_compression_agents(
         self,
