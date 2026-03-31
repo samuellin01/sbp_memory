@@ -276,8 +276,8 @@ class SmartContextManagementExtension(
         description="Merge consecutive fully-ignored turns into single system message to save tokens",
     )
     log_dir: str | None = Field(
-        default=".",
-        description="Directory to write context_edits.jsonl log file. Defaults to current working directory.",
+        default="/tmp",
+        description="Directory to write context_edits.json log file. Defaults to /tmp to avoid the agent accidentally git-adding or deleting it.",
     )
     context_window_size: int = Field(
         default=200000,
