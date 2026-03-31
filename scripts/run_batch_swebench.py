@@ -102,6 +102,7 @@ def build_agent_flags(
     compression_agent_model: Optional[str] = None,
     compression_agent_max_tokens: Optional[int] = None,
     compression_cooldown_tokens: Optional[int] = None,
+    max_edits_per_call: Optional[int] = None,
 ) -> list[str]:
     """Return the CLI flags to pass to the agent for the given experiment config."""
     if config == CONFIG_SMART_CONTEXT:
@@ -127,6 +128,8 @@ def build_agent_flags(
                 flags.extend(["--compression-agent-max-tokens", str(compression_agent_max_tokens)])
         if compression_cooldown_tokens is not None:
             flags.extend(["--compression-cooldown-tokens", str(compression_cooldown_tokens)])
+        if max_edits_per_call is not None:
+            flags.extend(["--max-edits-per-call", str(max_edits_per_call)])
         return flags
     # no_compression — minimal flags
     return ["--cache-min-prompt-length", "0"]
@@ -653,6 +656,7 @@ def run_problem(
         args.compression_agent_model,
         args.compression_agent_max_tokens,
         args.compression_cooldown_tokens,
+        args.max_edits_per_call,
     )
 
     logger.info(
@@ -1102,6 +1106,13 @@ def parse_args() -> argparse.Namespace:
         help="After compression, raise effective trigger to tokens_after + this value. "
         "Prevents tight re-trigger loops after weak compressions. 0 preserves default behavior.",
     )
+    parser.add_argument(
+        "--max_edits_per_call",
+        type=int,
+        default=None,
+        help="Maximum number of edits to apply per context_edit call. "
+        "Agent ranks edits by confidence; only top-k are applied.",
+    )
 
     # Container / agent
     parser.add_argument(
@@ -1265,6 +1276,8 @@ def main() -> None:
                 logger.info("  compression_agent_max_tokens: %d", args.compression_agent_max_tokens)
         if args.compression_cooldown_tokens is not None:
             logger.info("  compression_cooldown_tokens: %d", args.compression_cooldown_tokens)
+        if args.max_edits_per_call is not None:
+            logger.info("  max_edits_per_call:          %d", args.max_edits_per_call)
 
     # Load problems
     if not args.problems_file.exists():
