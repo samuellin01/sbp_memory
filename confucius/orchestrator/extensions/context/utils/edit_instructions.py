@@ -233,15 +233,24 @@ def _validate_ops(
 
 
 def apply_edit_instructions(
-    original_content: str, ops: list[EditOp]
+    original_content: str,
+    ops: list[EditOp],
+    line_number_offset: int = 1,
 ) -> str:
     """Apply parsed edit operations to the original content.
 
     The default for any line not covered by an operation is KEEP.
+    DELETE ops are converted to summary markers to prevent silent gaps
+    in the output — the compressed result must account for every line
+    in the original range.
 
     Args:
         original_content: The original tool result content.
         ops: List of edit operations to apply.
+        line_number_offset: The line number of the first line in the
+            original content (e.g. 850 if viewing lines 850-1050).
+            Used to produce accurate line references in markers when
+            DELETE ops are converted. Defaults to 1.
 
     Returns:
         The content after applying all edit operations.
@@ -286,8 +295,17 @@ def apply_edit_instructions(
             # KEEP — no operation covers this line
             output_parts.append(original_lines[line_no - 1])
         elif isinstance(op, DeleteOp):
-            # DELETE — skip this line entirely
-            continue
+            # Convert DELETE to a summary marker to prevent silent gaps.
+            # Emit the marker once at the start of the range.
+            op_id = id(op)
+            if op_id not in handled_ops:
+                handled_ops.add(op_id)
+                orig_start = op.start + line_number_offset - 1
+                orig_end = op.end + line_number_offset - 1
+                output_parts.append(
+                    f"[lines {orig_start}-{orig_end} omitted]"
+                )
+            # else: skip (marker already emitted)
         elif isinstance(op, ReplaceOp):
             # REPLACE — emit replacement content only once (at start of range)
             op_id = id(op)
