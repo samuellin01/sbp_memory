@@ -710,7 +710,6 @@ class SmartContextManagementExtension(
                 if tool_use.id == tool_use_id:
                     return isinstance(tool_use.input, dict) and (
                         tool_use.input.get(CLEARED_TOOL_USE_KEY) is True
-                        or tool_use.input.get(REWRITTEN_TOOL_USE_KEY) is True
                     )
             except Exception:
                 continue
@@ -2560,7 +2559,6 @@ Tips to reach the threshold:
                 original_input = self._extract_tool_use_input(tool_use, edit.tool_use_id)
                 new_input = {REWRITTEN_TOOL_USE_KEY: True, **(original_input or {})}
             self._compact_tool_use_input(tool_use, edit.tool_use_id, new_input)
-            self._ignored_tool_use_ids.add(edit.tool_use_id)
 
         tool_result = tool_use_msgs.tool_result
         if tool_result is not None and edit.tool_result_content_replacement is not None:
