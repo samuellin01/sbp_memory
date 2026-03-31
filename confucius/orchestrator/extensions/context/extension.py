@@ -2366,8 +2366,18 @@ Tips to reach the threshold:
         if line_info.has_line_numbers and line_info.first_line_number != 1:
             ops = remap_ops(ops, line_info.first_line_number)
 
+        # Pass the original line number offset so DELETE-to-marker conversion
+        # produces accurate line references (e.g. "lines 850-896" not "lines 1-47").
+        offset = (
+            line_info.first_line_number
+            if line_info.has_line_numbers
+            else 1
+        )
+
         try:
-            return apply_edit_instructions(original_content, ops)
+            return apply_edit_instructions(
+                original_content, ops, line_number_offset=offset
+            )
         except ValueError as e:
             context_edit_logger.warning(
                 "Failed to apply edit instructions: %s — keeping original content",
