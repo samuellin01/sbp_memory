@@ -27,6 +27,7 @@ async def run_agent_with_prompt(
     compression_agent_model: Optional[str] = None,
     compression_agent_max_tokens: Optional[int] = None,
     compression_cooldown_tokens: Optional[int] = None,
+    max_edits_per_call: Optional[int] = None,
 ) -> None:
     """
     Run the Confucius Code agent with a given prompt and wait for completion.
@@ -80,6 +81,7 @@ async def run_agent_with_prompt(
                 compression_agent_model=compression_agent_model,
                 compression_agent_max_tokens=compression_agent_max_tokens,
                 compression_cooldown_tokens=compression_cooldown_tokens,
+                max_edits_per_call=max_edits_per_call,
             )
             code_entry = CodeAssistEntry(smart_context_config=smart_context_config)
             await cf.invoke_analect(code_entry, EntryInput(question=prompt))
