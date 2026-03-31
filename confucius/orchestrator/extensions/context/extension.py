@@ -253,6 +253,11 @@ class SmartContextManagementExtension(
         default=100000,
         description="Input token count that triggers context optimization enforcement",
     )
+    compression_cooldown_tokens: int = Field(
+        default=0,
+        description="After compression, raise the effective trigger to tokens_after + this value. "
+        "Prevents tight re-trigger loops after weak compressions. 0 preserves current behavior.",
+    )
     reminder_enabled: bool = Field(
         default=True,
         description="Whether to inject the soft reminder SystemMessage when approaching the trigger threshold",
@@ -320,6 +325,7 @@ class SmartContextManagementExtension(
     _compressible_tokens: int | None = PrivateAttr(default=None)
     _continuous_edit_count: int = PrivateAttr(default=0)
     _enforce_mode: bool = PrivateAttr(default=False)
+    _effective_trigger: int | None = PrivateAttr(default=None)
     _current_model: str | None = PrivateAttr(default=None)
     _compression_agent_usage: list[dict[str, Any]] = PrivateAttr(default_factory=list)
     # Training data collection state
@@ -451,7 +457,9 @@ class SmartContextManagementExtension(
 
     @property
     def enforced_input_tokens_trigger(self) -> int:
-        """Get the enforced input tokens trigger (now just returns input_tokens_trigger directly)."""
+        """Get the effective input tokens trigger, accounting for cooldown after compression."""
+        if self._effective_trigger is not None:
+            return self._effective_trigger
         return self.input_tokens_trigger
 
     def _is_message_fully_processed(self, msg: CfMessage) -> bool:
@@ -584,9 +592,10 @@ class SmartContextManagementExtension(
                 "tool_use_summary": tool_use_summary,
             })
 
-        # Calculate reminder and enforcement triggers
-        reminder_trigger = int(self.input_tokens_trigger * self.reminder_ratio) if self.reminder_enabled else self.input_tokens_trigger
-        enforcement_trigger = self.input_tokens_trigger
+        # Calculate reminder and enforcement triggers (using effective trigger for cooldown)
+        effective_trigger = self.enforced_input_tokens_trigger
+        reminder_trigger = int(effective_trigger * self.reminder_ratio) if self.reminder_enabled else effective_trigger
+        enforcement_trigger = effective_trigger
 
         # Calculate _compressible_tokens when above the minimum trigger threshold
         if total_length >= min(reminder_trigger, enforcement_trigger):
@@ -778,9 +787,9 @@ class SmartContextManagementExtension(
         if tool_use.name != CONTEXT_EDIT_TOOL_NAME:
             self._continuous_edit_count = 0
 
-        # Enforce context management if input tokens exceed threshold
+        # Enforce context management if input tokens exceed threshold (with cooldown)
         last_prompt_token_length = self.get_last_prompt_token_length() or 0
-        if last_prompt_token_length >= self.input_tokens_trigger:
+        if last_prompt_token_length >= self.enforced_input_tokens_trigger:
             if tool_use.name not in MEMORY_TOOL_NAMES + [CONTEXT_EDIT_TOOL_NAME]:
                 # Set flag before raising interruption - it will be read in the next
                 # on_invoke_llm_with_params call to inject the enforcement message
@@ -1205,6 +1214,14 @@ class SmartContextManagementExtension(
         self._pending_data.clear()  # Clear pending on success
         self._continuous_edit_count = 0  # Reset counter on success
 
+        # Apply cooldown: raise the effective trigger so we don't immediately
+        # re-trigger compression after a weak compression.
+        if self.compression_cooldown_tokens > 0:
+            self._effective_trigger = max(
+                self.input_tokens_trigger,
+                stats.tokens_after + self.compression_cooldown_tokens,
+            )
+
         self._log_context_edit({
             "event": "context_edit_applied",
             "tool_use_id": tool_use_id,
@@ -1578,6 +1595,13 @@ Applied {len(validation_result.valid_edits)} pending edit(s).
         self._pending_data.clear()
         self._continuous_edit_count = 0
 
+        # Apply cooldown (same as _handle_successful_edits)
+        if self.compression_cooldown_tokens > 0:
+            self._effective_trigger = max(
+                self.input_tokens_trigger,
+                stats.tokens_after + self.compression_cooldown_tokens,
+            )
+
         self._write_context_edit_json({
             "event": "context_edit_applied",
             "tool_use_id": tool_use_id,
@@ -1688,7 +1712,7 @@ Applied {len(validation_result.valid_edits)} pending edit(s).
     async def on_process_messages_complete(self, context: AnalectRunContext) -> None:
         """Check if progress needs to be updated and raise interruption if not complete"""
         if not self._pending_data.edits or (
-            (self.get_last_prompt_token_length() or 0) < self.input_tokens_trigger
+            (self.get_last_prompt_token_length() or 0) < self.enforced_input_tokens_trigger
         ):
             return
 
@@ -2104,7 +2128,7 @@ Tips to reach the threshold:
 
         # If not enforcing, pass validation
         if not self.enforce_clear_at_least and (
-            (self.get_last_prompt_token_length() or 0) >= self.input_tokens_trigger
+            (self.get_last_prompt_token_length() or 0) >= self.enforced_input_tokens_trigger
         ):
             return (estimated_savings, False, edit_savings_map)
 
