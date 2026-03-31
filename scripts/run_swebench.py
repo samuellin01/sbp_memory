@@ -134,6 +134,14 @@ def main() -> None:
         "Prevents tight re-trigger loops after weak compressions. 0 preserves default behavior. "
         "Only used when --enable-smart-context is set.",
     )
+    parser.add_argument(
+        "--max-edits-per-call",
+        type=int,
+        default=None,
+        help="Maximum number of edits to apply per context_edit call. "
+        "The agent ranks edits by confidence (most confident first); only the top-k are applied. "
+        "Only used when --enable-smart-context is set.",
+    )
 
     # Cache configuration (available regardless of smart context)
     parser.add_argument(
@@ -242,6 +250,8 @@ Plz make sure you commit your change at the end, otherwise I won't be able to ex
                 print(f"  - context_window_size: {args.context_window_size}")
         if args.compression_cooldown_tokens is not None:
             print(f"  - compression_cooldown_tokens: {args.compression_cooldown_tokens}")
+        if args.max_edits_per_call is not None:
+            print(f"  - max_edits_per_call: {args.max_edits_per_call}")
         if args.enable_compression_agent:
             print("  - compression_agent: ENABLED")
             if args.compression_agent_model is not None:
@@ -281,6 +291,7 @@ Plz make sure you commit your change at the end, otherwise I won't be able to ex
                 compression_agent_model=args.compression_agent_model,
                 compression_agent_max_tokens=args.compression_agent_max_tokens,
                 compression_cooldown_tokens=args.compression_cooldown_tokens,
+                max_edits_per_call=args.max_edits_per_call,
             )
         )
         print("Agent completed successfully")
