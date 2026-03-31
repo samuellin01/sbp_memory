@@ -320,6 +320,7 @@ class SmartContextManagementExtension(
     _compressible_tokens: int | None = PrivateAttr(default=None)
     _continuous_edit_count: int = PrivateAttr(default=0)
     _enforce_mode: bool = PrivateAttr(default=False)
+    _dynamic_trigger: int | None = PrivateAttr(default=None)
     _current_model: str | None = PrivateAttr(default=None)
     _compression_agent_usage: list[dict[str, Any]] = PrivateAttr(default_factory=list)
     # Training data collection state
@@ -450,9 +451,29 @@ class SmartContextManagementExtension(
         return int(effective_threshold * self.enforce_clear_at_least_tolerance)
 
     @property
-    def enforced_input_tokens_trigger(self) -> int:
-        """Get the enforced input tokens trigger (now just returns input_tokens_trigger directly)."""
-        return self.input_tokens_trigger
+    def effective_input_tokens_trigger(self) -> int:
+        """Get the effective input tokens trigger, accounting for dynamic adjustment.
+
+        After a weak compression, the dynamic trigger prevents tight re-triggering
+        by requiring the context to grow by at least clear_at_least tokens before
+        the next compression attempt.
+        """
+        return max(self.input_tokens_trigger, self._dynamic_trigger or 0)
+
+    def _update_dynamic_trigger(self, post_compression_tokens: int) -> None:
+        """Update the dynamic trigger after a compression.
+
+        Sets next_trigger = post_compression_tokens + clear_at_least, so the
+        system won't re-trigger until there's enough new material to compress.
+        If the compression was strong, this falls below input_tokens_trigger
+        and has no effect.
+        """
+        self._dynamic_trigger = post_compression_tokens + self.clear_at_least
+        logger.info(
+            f"Dynamic trigger updated: {self._dynamic_trigger:,} "
+            f"(post_compression={post_compression_tokens:,} + clear_at_least={self.clear_at_least:,}), "
+            f"effective trigger: {self.effective_input_tokens_trigger:,}"
+        )
 
     def _is_message_fully_processed(self, msg: CfMessage) -> bool:
         """Check if ALL tool_use_ids in this message have been processed (cleared or rewritten)."""
@@ -585,8 +606,8 @@ class SmartContextManagementExtension(
             })
 
         # Calculate reminder and enforcement triggers
-        reminder_trigger = int(self.input_tokens_trigger * self.reminder_ratio) if self.reminder_enabled else self.input_tokens_trigger
-        enforcement_trigger = self.input_tokens_trigger
+        reminder_trigger = int(self.effective_input_tokens_trigger * self.reminder_ratio) if self.reminder_enabled else self.effective_input_tokens_trigger
+        enforcement_trigger = self.effective_input_tokens_trigger
 
         # Calculate _compressible_tokens when above the minimum trigger threshold
         if total_length >= min(reminder_trigger, enforcement_trigger):
@@ -780,7 +801,7 @@ class SmartContextManagementExtension(
 
         # Enforce context management if input tokens exceed threshold
         last_prompt_token_length = self.get_last_prompt_token_length() or 0
-        if last_prompt_token_length >= self.input_tokens_trigger:
+        if last_prompt_token_length >= self.effective_input_tokens_trigger:
             if tool_use.name not in MEMORY_TOOL_NAMES + [CONTEXT_EDIT_TOOL_NAME]:
                 # Set flag before raising interruption - it will be read in the next
                 # on_invoke_llm_with_params call to inject the enforcement message
@@ -1204,6 +1225,7 @@ class SmartContextManagementExtension(
         stats, edit_items = await self._apply_edits(edits_to_apply, context)
         self._pending_data.clear()  # Clear pending on success
         self._continuous_edit_count = 0  # Reset counter on success
+        self._update_dynamic_trigger(stats.tokens_after)
 
         self._log_context_edit({
             "event": "context_edit_applied",
@@ -1517,6 +1539,7 @@ class SmartContextManagementExtension(
             stats, edit_items = await self._apply_edits(edits_to_apply, context)
             self._pending_data.clear()
             self._continuous_edit_count = 0
+            self._update_dynamic_trigger(stats.tokens_after)
 
             self._write_context_edit_json({
                 "event": "context_edit_applied",
@@ -1577,6 +1600,7 @@ Applied {len(validation_result.valid_edits)} pending edit(s).
         stats, edit_items = await self._apply_edits(all_edits, context)
         self._pending_data.clear()
         self._continuous_edit_count = 0
+        self._update_dynamic_trigger(stats.tokens_after)
 
         self._write_context_edit_json({
             "event": "context_edit_applied",
@@ -1688,7 +1712,7 @@ Applied {len(validation_result.valid_edits)} pending edit(s).
     async def on_process_messages_complete(self, context: AnalectRunContext) -> None:
         """Check if progress needs to be updated and raise interruption if not complete"""
         if not self._pending_data.edits or (
-            (self.get_last_prompt_token_length() or 0) < self.input_tokens_trigger
+            (self.get_last_prompt_token_length() or 0) < self.effective_input_tokens_trigger
         ):
             return
 
@@ -2104,7 +2128,7 @@ Tips to reach the threshold:
 
         # If not enforcing, pass validation
         if not self.enforce_clear_at_least and (
-            (self.get_last_prompt_token_length() or 0) >= self.input_tokens_trigger
+            (self.get_last_prompt_token_length() or 0) >= self.effective_input_tokens_trigger
         ):
             return (estimated_savings, False, edit_savings_map)
 
