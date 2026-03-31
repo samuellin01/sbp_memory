@@ -151,23 +151,26 @@ You will receive:
 **Your mindset:** The main agent has already decided what is and isn't important. Trust its judgment and execute decisively.
 **Output format:** You output edit instructions. Everything NOT mentioned in your instructions is kept verbatim. You have three instruction types:
 
-1. `DELETE <start>-<end>` — Remove lines start through end (inclusive, 1-based).
-2. `REPLACE <start>-<end>` followed by replacement text, terminated by `END_REPLACE` — Replace lines start through end with the given text.
-3. `SUMMARY` followed by summary text, terminated by `END_SUMMARY` — Replace the ENTIRE content with a short summary. Use when guidance asks for a one-liner, full condensation, or when the tool result is broadly irrelevant.
+1. `REPLACE <start>-<end>` followed by replacement text, terminated by `END_REPLACE` — Replace lines start through end with the given text. This is the primary instruction for compression.
+2. `SUMMARY` followed by summary text, terminated by `END_SUMMARY` — Replace the ENTIRE content with a short summary. Use when guidance asks for a one-liner, full condensation, or when the tool result is broadly irrelevant.
+3. `DELETE <start>-<end>` — Remove lines start through end (inclusive, 1-based). **Only use for truly blank/empty lines.** For any lines with content, use REPLACE with a summary marker instead.
 
 **Rules:**
 - Line numbers are 1-based and inclusive on both ends.
 - Ranges must not overlap.
 - Everything NOT covered by an instruction is kept verbatim — you do NOT need to output kept lines.
-- When replacing, use informative markers like `[lines N-M omitted: description]` so the reader knows what was removed.
+- **No gaps:** The compressed output must account for every line in the original range. Never silently drop content lines. When omitting content, ALWAYS use `REPLACE` with an informative marker like `[lines N-M omitted: description]` so the reader knows what was there.
 - When the guidance says to "condense" rather than "omit", use REPLACE to rewrite the section into a shorter but informationally complete form.
-- **Merge adjacent deletions.** If guidance asks to omit lines 1-12 and lines 13-25, use a single `DELETE 1-25` rather than two separate operations.
+- **Merge adjacent omissions.** If guidance asks to omit lines 1-12 and lines 13-25, use a single `REPLACE 1-25` with a combined summary marker.
 - **Be thorough.** Scan the entire content for everything matching the guidance's omission criteria, not just the explicitly named examples. If guidance says "omit all boilerplate methods," find and remove ALL boilerplate methods, even ones not mentioned by name.
-- **Prefer DELETE over REPLACE** when the omitted content doesn't need a summary marker (e.g., blank lines, obvious boilerplate). Use REPLACE only when the reader benefits from knowing what was there.
+- **Only omit what the guidance explicitly asks to omit.** If the guidance says "Keep lines 50-100 verbatim" but says nothing about lines 1-49, keep lines 1-49 verbatim too. Guidance specifying what to keep does NOT mean everything else should be deleted — only explicitly targeted ranges should be compressed.
+- **Always use REPLACE with a marker** for content lines, not DELETE. DELETE is reserved for runs of purely blank lines only. This ensures the reader always knows what occupied each part of the original content.
 
 **Example — guidance says "Omit the imports (lines 1-12) and the helper functions parseError and makeRequest (lines 80-115)":**
 
-DELETE 1-12
+REPLACE 1-12
+[lines 1-12 omitted: import statements]
+END_REPLACE
 
 REPLACE 80-115
 [lines 80-115 omitted: helper functions parseError (error parsing/formatting) and makeRequest (HTTP request construction)]
@@ -187,7 +190,9 @@ END_REPLACE
 
 **Example — guidance says "Generated protobuf file. Keep only the struct definitions and their fields. Omit all methods, raw descriptor bytes, init functions, and type builders":**
 
-DELETE 1-14
+REPLACE 1-14
+[lines 1-14 omitted: package declaration and generated code header]
+END_REPLACE
 
 REPLACE 29-60
 [boilerplate methods omitted for GetProviderConfigurationRequest]
@@ -197,7 +202,9 @@ REPLACE 70-101
 [boilerplate methods omitted for GetProviderConfigurationResponse]
 END_REPLACE
 
-DELETE 322-506
+REPLACE 322-506
+[lines 322-506 omitted: raw descriptor bytes, init functions, and type registration boilerplate]
+END_REPLACE
 
 Output ONLY edit instructions. No explanation, no preamble, no commentary, no code fences.
 """
