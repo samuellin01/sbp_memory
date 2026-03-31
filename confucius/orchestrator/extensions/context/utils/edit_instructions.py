@@ -26,8 +26,15 @@ Line numbers are 1-based and inclusive on both ends.
 import logging
 import re
 from dataclasses import dataclass, field
+from typing import Sequence
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+# Matches common line-number prefixes in tool output:
+#   "  1|...",  " 10|...",  "100|...",  "1: ...",  " 10: ..."
+_LINE_NUMBER_PREFIX: re.Pattern[str] = re.compile(
+    r"^\s*(\d+)\s*[|:]\s?"
+)
 
 
 @dataclass
@@ -290,3 +297,99 @@ def apply_edit_instructions(
             # else: skip (replacement already emitted)
 
     return "\n".join(output_parts)
+
+
+# ── Line-number detection and remapping ──────────────────────────────────
+
+
+@dataclass
+class LineNumberInfo:
+    """Result of detecting line numbers in content."""
+
+    has_line_numbers: bool
+    first_line_number: int = 1  # The number on the first line (usually 1)
+
+
+def detect_line_numbers(content: str, sample_size: int = 10) -> LineNumberInfo:
+    """Detect whether content already has line-number prefixes.
+
+    Checks the first *sample_size* non-empty lines for a consistent
+    ``N|`` or ``N:`` prefix with incrementing numbers.
+
+    Args:
+        content: The content to inspect.
+        sample_size: How many lines to check (default 10).
+
+    Returns:
+        LineNumberInfo with detection result and starting line number.
+    """
+    lines = content.splitlines()
+    if not lines:
+        return LineNumberInfo(has_line_numbers=False)
+
+    numbers: list[int] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        m = _LINE_NUMBER_PREFIX.match(line)
+        if m:
+            numbers.append(int(m.group(1)))
+        else:
+            # Non-empty line without a number prefix → not numbered
+            return LineNumberInfo(has_line_numbers=False)
+        if len(numbers) >= sample_size:
+            break
+
+    if len(numbers) < 2:
+        return LineNumberInfo(has_line_numbers=False)
+
+    # Check that numbers are incrementing by 1
+    for a, b in zip(numbers, numbers[1:]):
+        if b != a + 1:
+            return LineNumberInfo(has_line_numbers=False)
+
+    return LineNumberInfo(
+        has_line_numbers=True,
+        first_line_number=numbers[0],
+    )
+
+
+def remap_ops(
+    ops: list[EditOp], offset: int
+) -> list[EditOp]:
+    """Shift line numbers in ops so they become 1-based array indices.
+
+    When the original content has line numbers starting at *offset*
+    (e.g. 50), the compression agent's instructions reference those
+    numbers. This function subtracts ``offset - 1`` so that line 50
+    maps to array position 1, line 51 to 2, etc.
+
+    Args:
+        ops: Parsed edit operations with original line numbers.
+        offset: The line number of the first line in the content.
+
+    Returns:
+        New list of ops with adjusted line numbers.
+    """
+    if offset == 1:
+        return ops  # No remapping needed
+
+    shift = offset - 1
+    remapped: list[EditOp] = []
+    for op in ops:
+        if isinstance(op, DeleteOp):
+            remapped.append(
+                DeleteOp(start=op.start - shift, end=op.end - shift)
+            )
+        elif isinstance(op, ReplaceOp):
+            remapped.append(
+                ReplaceOp(
+                    start=op.start - shift,
+                    end=op.end - shift,
+                    content=op.content,
+                )
+            )
+        else:
+            # SummaryOp — no line numbers to remap
+            remapped.append(op)
+    return remapped
