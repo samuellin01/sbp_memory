@@ -258,6 +258,12 @@ class SmartContextManagementExtension(
         description="After compression, raise the effective trigger to tokens_after + this value. "
         "Prevents tight re-trigger loops after weak compressions. 0 preserves current behavior.",
     )
+    max_edits_per_call: int | None = Field(
+        default=None,
+        description="Maximum number of edits to apply per context_edit call. "
+        "The agent ranks edits by confidence (most confident first); only the top-k are applied, "
+        "the rest are silently dropped. None means no limit (apply all).",
+    )
     reminder_enabled: bool = Field(
         default=True,
         description="Whether to inject the soft reminder SystemMessage when approaching the trigger threshold",
@@ -1656,6 +1662,14 @@ Applied {len(validation_result.valid_edits)} pending edit(s).
         # Parse and merge edits
         input_data = ContextEditInput.model_validate(tool_use.input)
         new_edits = input_data.edits
+
+        # Apply top-k truncation: agent ranks edits by confidence (most confident
+        # first), we only keep the top max_edits_per_call.
+        dropped_count = 0
+        if self.max_edits_per_call is not None and len(new_edits) > self.max_edits_per_call:
+            dropped_count = len(new_edits) - self.max_edits_per_call
+            new_edits = new_edits[: self.max_edits_per_call]
+
         all_edits, pending_count, replaced_edits = self._merge_pending_with_new_edits(
             new_edits
         )
@@ -1666,6 +1680,7 @@ Applied {len(validation_result.valid_edits)} pending edit(s).
             "new_edits": [e.model_dump(mode="json", exclude_none=True) for e in new_edits],
             "total_edits": len(all_edits),
             "pending_count": pending_count,
+            "dropped_by_top_k": dropped_count,
         })
 
         # Handle empty edits with pending
