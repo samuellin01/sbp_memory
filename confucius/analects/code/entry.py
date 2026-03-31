@@ -58,6 +58,7 @@ class SmartContextConfig:
     compression_agent_model: Optional[str] = None
     compression_agent_max_tokens: Optional[int] = None
     compression_cooldown_tokens: Optional[int] = None
+    max_edits_per_call: Optional[int] = None
 
 
 @public
@@ -174,6 +175,10 @@ class CodeAssistEntry(Analect[EntryInput, EntryOutput], EntryAnalectMixin):
             if self.smart_context_config.compression_cooldown_tokens is not None:
                 smart_context_kwargs["compression_cooldown_tokens"] = (
                     self.smart_context_config.compression_cooldown_tokens
+                )
+            if self.smart_context_config.max_edits_per_call is not None:
+                smart_context_kwargs["max_edits_per_call"] = (
+                    self.smart_context_config.max_edits_per_call
                 )
 
             extensions.append(SmartContextManagementExtension(**smart_context_kwargs))
