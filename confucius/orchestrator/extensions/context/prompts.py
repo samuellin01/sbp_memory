@@ -37,11 +37,8 @@ If you continue without optimizing context, you risk:
 **⚠️ Important:** DO NOT try to edit tool uses that were already rewritten in previous context edits if they no longer have significant content to compress.
 
 **Safety Constraints**:
-- Try your best to clear at least {clear_at_least:,} tokens to justify the operation
+- Try your best to clear at least {clear_at_least:,} tokens to justify the operation, but it's better to fall short than to delete something that will be important later.
 
-⚠️ **Cache Consideration**: Clearing context invalidates cached prompt prefixes.
-Make each edit worthwhile by clearing enough tokens (at least {clear_at_least:,})
-and avoiding too-frequent calls.
 """
 
 
@@ -57,15 +54,25 @@ Use this tool when context usage is high to optimize memory. You provide guidanc
 
 **Your job:** For each tool result you want to compress, provide:
 - The tool_use_id
-- Guidance describing what content is relevant and should be kept, and what can be omitted
+- Guidance describing what content is relevant and what can be omitted, and what must be kept
 
 **Examples of good guidance:**
-- "Keep the edit function (lines ~148-154) and the delete function. Omit imports, other socket handlers."
+- "Omit the import block (lines 1-12) and the logger/config setup (lines 13-25) — these are standard boilerplate I won't need to reference or modify. Keep everything else."
+- "Omit the test setup fixtures and teardown helpers (lines 1-40), they follow standard patterns. Keep all test case functions and their assertions exactly as-is — I need to match this expected behavior."
+- "Omit the unexported helper functions parseError (lines 80-95) and makeRequest (lines 96-115) — I've already read them and won't need to modify them. Keep the exported API methods and struct definitions."
+- "This grep returned 50 matches across 12 files. Condense to just the file paths and line numbers — I've already identified which files to open and don't need the matched line content anymore."
+- "I already applied this edit successfully and verified it works. Condense to a one-line summary of what was changed, e.g. 'Renamed Client to client in lastfm/client.go lines 15, 23, 47 (done).'"
+- "This test run output shows 98 passing tests and 2 failures. Omit the individual passing test lines but note how many passed and list their names. Keep the 2 failing tests with their full tracebacks and assertion details — I need
+those to debug."
+
+**Examples of bad guidance:**
+- "Keep the edit function (lines ~148-154) and the delete function. Omit the rest."
 - "Keep chat-related error entries. Omit all non-chat entries."
 - "Totally irrelevant to current task — compress to a one-liner."
 - "Keep the git diff hunks for assert.js. Omit the test file changes."
 
 **Key principles:**
+- **str_replace() calls are very frequently called by the agent, and those require exact knowledge of the content in question, so they should not be summarized.**
 - **Breadth over depth**: Prefer compressing many tool results lightly over aggressively compressing a few.
 - **Prioritize older, outdated tool uses** for compression. Keep recent tool uses relevant to the current task.
 - **Preserve Dynamic Contexts:** Do NOT compress tool uses that load dynamic context (e.g., `skill_view`).
@@ -132,50 +139,79 @@ and avoiding too-frequent calls.
 """
 
 COMPRESSION_AGENT_SYSTEM_PROMPT = """\
-You are a context compression agent. Your job is to compress a tool result using selective omission.
+You are a context rewriting/optimizing agent. Your job is to redact specific lines from a tool result based on guidance from the main agent.
 
 You will receive:
 1. The original tool result content
-2. Guidance from the main agent about what is relevant
+2. Guidance from the main agent specifying what to omit or condense
 
-Your task: produce a compressed version that preserves relevant content verbatim and omits irrelevant sections.
+**Your approach: conservative, guidance-driven redaction.**
 
-**Rules:**
+- Only redact lines that the guidance explicitly identifies for omission or condensing.
+- Everything NOT mentioned in the guidance MUST be kept verbatim — do not paraphrase, summarize, or rearrange.
+- Replace each redacted section with an informative `[lines N-M omitted: description]` marker that tells the reader what was there and how many lines were removed.
+- Never redact more broadly than the guidance asks. If the guidance says "omit lines 1-12", do not omit lines 1-20.
+- When the guidance says to "condense" rather than "omit", rewrite the section into a shorter but informationally complete form — preserve key facts, counts, names, and outcomes.
 
-For content with relevant parts — use **selective omission**:
-- Keep exact original lines VERBATIM for relevant sections — never paraphrase or summarize code
-- Use `[lines N-M omitted: brief description]` markers for irrelevant sections
-- Be as granular as needed — you can have many alternating omit/keep sections
-- Bias toward keeping. When in doubt, keep the content. Only omit lines you are confident are irrelevant.
+**Example — guidance says "Omit the imports (lines 1-12) and the helper functions parseError and makeRequest (lines 80-115)":**
 
-Example — a 350-line file where functions at lines 45-60 and 120-135 are relevant:
+Input (150-line file):
 ```
-[lines 1-44 omitted: imports, config constants, logger setup]
-
-def process_payment(order_id, amount):
-    tx = db.begin_transaction()
-    try:
-        record = PaymentRecord(order_id=order_id, amount=amount)
-        tx.insert(record)
-        gateway.charge(record)
-        tx.commit()
-    except GatewayError as e:
-        tx.rollback()
-        raise PaymentFailed(order_id, e)
-
-[lines 61-119 omitted: refund_payment, list_transactions]
-
-def generate_report(start_date, end_date):
-    transactions = db.query(Transaction).filter(
-        Transaction.date.between(start_date, end_date)
-    ).all()
-    return ReportBuilder(transactions).build()
-
-[lines 136-350 omitted: export_csv, admin helpers, CLI commands]
+1: import os
+2: import sys
+...
+12: from utils import log
+13:
+14: class Client:
+15:     def __init__(self, api_key):
+...
+79:         return response.json()
+80:
+81:     def parseError(self, raw):
+...
+115:        return request
+116:
+117:     def search(self, query):
+...
+150:        return results
 ```
 
-For content that is totally irrelevant — a one-line annotation is fine:
-- "Viewed /app/package.json — project config with express, jest deps. Not relevant to current task."
+Output:
+```
+[lines 1-12 omitted: 12 lines of imports including os, sys, utils]
+
+class Client:
+    def __init__(self, api_key):
+...
+        return response.json()
+
+[lines 80-115 omitted: helper functions parseError (error parsing/formatting) and makeRequest (HTTP request construction)]
+
+    def search(self, query):
+...
+        return results
+```
+
+**Example — guidance says "condense to a one-line summary of what was changed":**
+
+Output:
+```
+Renamed Client to client and NewClient to newClient in lastfm/client.go (lines 15, 23, 47). Edit applied and verified.
+```
+
+**Example — guidance says "Omit the passing test details but note how many passed. Keep the 2 failures with tracebacks":**
+
+Output:
+```
+98 tests passed: test_login, test_signup, test_validate, ...
+
+FAILED test_validate_token (line 145):
+    assert result.status == "valid"
+    AssertionError: "invalid" != "valid"
+
+FAILED test_scrobble_retry (line 203):
+    TimeoutError: connection timed out after 30s
+```
 
 Output ONLY the compressed content. No explanation, no preamble.
 """
