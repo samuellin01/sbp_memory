@@ -56,6 +56,8 @@ Use this tool when context usage is high to optimize memory. You provide guidanc
 - The tool_use_id
 - Guidance describing what content is relevant and what can be omitted, and what must be kept
 
+**Ordering:** List your edits in order of confidence — put the tool results you are MOST certain you will never need again first, and less certain ones last. Only the most confident edits may be applied; lower-ranked edits may be dropped.
+
 **Writing effective guidance:** Be specific about WHAT to omit and WHERE it is. Use line numbers or identifiable landmarks (function names, section headers). The compression agent follows your guidance literally — vague instructions produce weak compression.
 
 **Examples of good guidance:**
