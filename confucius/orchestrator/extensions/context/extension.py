@@ -2127,8 +2127,10 @@ Tips to reach the threshold:
         estimated_savings += cleanup_savings
 
         # If not enforcing, pass validation
+        # Use fixed input_tokens_trigger here (not dynamic) because the dynamic trigger
+        # controls when to *prompt* for compression, not whether to *allow* it once started
         if not self.enforce_clear_at_least and (
-            (self.get_last_prompt_token_length() or 0) >= self.effective_input_tokens_trigger
+            (self.get_last_prompt_token_length() or 0) >= self.input_tokens_trigger
         ):
             return (estimated_savings, False, edit_savings_map)
 
