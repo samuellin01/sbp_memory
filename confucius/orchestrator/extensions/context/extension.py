@@ -34,7 +34,9 @@ from .prompts import (
 )
 from .utils.edit_instructions import (
     apply_edit_instructions,
+    detect_line_numbers,
     parse_edit_instructions,
+    remap_ops,
 )
 from .utils.turn_merge import merge_fully_ignored_turns
 
@@ -2279,8 +2281,13 @@ Tips to reach the threshold:
         """
         from ....core.llm_manager import LLMParams
 
-        # Send line-numbered content so the agent can reference exact ranges
-        numbered_content = self._add_line_numbers(original_content)
+        # Detect if content already has line numbers (e.g. from str_replace_based_edit_tool view).
+        # If so, skip adding ours to avoid double-numbering confusion.
+        line_info = detect_line_numbers(original_content)
+        if line_info.has_line_numbers:
+            numbered_content = original_content
+        else:
+            numbered_content = self._add_line_numbers(original_content)
 
         user_message = COMPRESSION_AGENT_USER_PROMPT_TEMPLATE.format(
             guidance=guidance,
@@ -2343,22 +2350,30 @@ Tips to reach the threshold:
             )
 
         if not parse_result.ops:
-            # No valid instructions parsed — fall back to raw output
-            # (handles edge cases where the agent outputs plain text)
-            context_edit_logger.warning(
-                "No edit instructions parsed from compression agent output, "
-                "falling back to raw output"
+            # No valid instructions parsed — return original content unchanged.
+            # This commonly happens when the agent decides no changes are needed
+            # (e.g., "No changes needed. The content should be kept exactly as-is.")
+            context_edit_logger.info(
+                "No edit instructions parsed from compression agent output — "
+                "keeping original content unchanged"
             )
-            return raw_output
+            return original_content
+
+        # If the original content had line numbers starting at an offset (e.g. 50),
+        # the agent's instructions reference those numbers. Remap to 1-based array
+        # indices so apply_edit_instructions works correctly.
+        ops = parse_result.ops
+        if line_info.has_line_numbers and line_info.first_line_number != 1:
+            ops = remap_ops(ops, line_info.first_line_number)
 
         try:
-            return apply_edit_instructions(original_content, parse_result.ops)
+            return apply_edit_instructions(original_content, ops)
         except ValueError as e:
             context_edit_logger.warning(
-                "Failed to apply edit instructions: %s — falling back to raw output",
+                "Failed to apply edit instructions: %s — keeping original content",
                 e,
             )
-            return raw_output
+            return original_content
 
     async def _run_compression_agents(
         self,
