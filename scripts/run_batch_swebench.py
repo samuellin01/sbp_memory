@@ -500,11 +500,11 @@ def extract_results(
     # 0. List files in /app for debugging
     try:
         ls_result = run_cmd(
-            [runtime, "exec", name, "sh", "-c", "ls -la /app/*.json /app/*.jsonl 2>/dev/null || echo '(no json files)'"],
+            [runtime, "exec", name, "sh", "-c", "ls -la /app/*.json /app/*.jsonl /tmp/*.json /tmp/*.jsonl 2>/dev/null || echo '(no json files)'"],
             logger,
             timeout=30,
         )
-        logger.info("Files in /app: %s", ls_result.stdout.strip())
+        logger.info("Files in /app and /tmp: %s", ls_result.stdout.strip())
     except Exception as e:
         logger.warning("Could not list /app files: %s", e)
 
@@ -540,7 +540,8 @@ def extract_results(
     _podman_cp("/app/logs.txt", "logs.txt")
 
     # 2b. context_edits.json — context edit log (if smart context was used)
-    _podman_cp("/app/context_edits.json", "context_edits.json")
+    # Written to /tmp/ to avoid the agent accidentally git-adding or deleting it
+    _podman_cp("/tmp/context_edits.json", "context_edits.json")
 
     # 3. traj_*.json — list matching files inside the container then copy each
     try:
