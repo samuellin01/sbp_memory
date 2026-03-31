@@ -236,7 +236,7 @@ class SmartContextManagementExtension(
         description="Minimum tokens that must be cleared per edit to justify the operation",
     )
     enforce_clear_at_least: bool = Field(
-        default=True,
+        default=False,
         description="Whether to enforce the clear_at_least threshold",
     )
     enforce_clear_at_least_tolerance: float = Field(
@@ -581,13 +581,13 @@ class SmartContextManagementExtension(
         # Calculate reminder and enforcement triggers
         reminder_trigger = int(self.input_tokens_trigger * self.reminder_ratio) if self.reminder_enabled else self.input_tokens_trigger
         enforcement_trigger = self.input_tokens_trigger
-        
+
         # Calculate _compressible_tokens when above the minimum trigger threshold
         if total_length >= min(reminder_trigger, enforcement_trigger):
             self._compressible_tokens = await self._calculate_compressible_tokens(
                 context
             )
-        
+
         # Inject reminder message if enabled and above reminder threshold
         if self.reminder_enabled and total_length >= reminder_trigger:
             messages.append(
@@ -601,7 +601,7 @@ class SmartContextManagementExtension(
                     )
                 )
             )
-        
+
         # Inject enforcement message if in enforce mode
         if self._enforce_mode:
             # _compressible_tokens may be None if the reminder threshold was not crossed
