@@ -340,6 +340,39 @@ class SmartContextManagementExtension(
     _tool_use_registry: dict[str, dict[str, Any]] = PrivateAttr(default_factory=dict)
     # Track which tool_use_ids were edited and how
     _edit_history: list[dict[str, Any]] = PrivateAttr(default_factory=list)
+    _task_context: str | None = PrivateAttr(default=None)
+
+    def _get_task_context(self, context: AnalectRunContext) -> str:
+        """Extract a concise task description from the first user message.
+
+        Returns a cached result after the first call since the task doesn't change.
+        """
+        if self._task_context is not None:
+            return self._task_context
+
+        max_chars = 500
+        messages = context.memory_manager.get_session_memory().messages
+        for msg in messages:
+            if msg.type == cf.MessageType.HUMAN:
+                content = msg.content
+                if isinstance(content, list):
+                    # Extract text from content blocks
+                    parts = []
+                    for block in content:
+                        if isinstance(block, str):
+                            parts.append(block)
+                        elif isinstance(block, dict) and block.get("type") == "text":
+                            parts.append(block.get("text", ""))
+                    content = " ".join(parts)
+                if isinstance(content, str) and content.strip():
+                    text = content.strip()
+                    if len(text) > max_chars:
+                        text = text[:max_chars] + "..."
+                    self._task_context = text
+                    return self._task_context
+
+        self._task_context = "No task context available."
+        return self._task_context
 
     def _get_tool_use_messages(self, tool_use_id: str) -> _ToolUseMessages:
         """Get the messages for a single tool use."""
@@ -2301,6 +2334,7 @@ Tips to reach the threshold:
         guidance: str,
         token_count: int,
         context: AnalectRunContext,
+        task_context: str = "No task context available.",
     ) -> str:
         """Run the compression agent on a single tool result.
 
@@ -2314,6 +2348,7 @@ Tips to reach the threshold:
             guidance: The main agent's guidance on what to keep/omit
             token_count: Estimated token count of the original content
             context: Analect run context for LLM access
+            task_context: Brief description of the current task for the compression agent
 
         Returns:
             Compressed content string (after applying edit instructions)
@@ -2329,6 +2364,7 @@ Tips to reach the threshold:
             numbered_content = self._add_line_numbers(original_content)
 
         user_message = COMPRESSION_AGENT_USER_PROMPT_TEMPLATE.format(
+            task_context=task_context,
             guidance=guidance,
             content=numbered_content,
             token_count=token_count,
@@ -2438,6 +2474,9 @@ Tips to reach the threshold:
         Returns:
             List of edits with tool_result_content_replacement filled in
         """
+        # Extract task context once for all compression agents in this batch
+        task_context = self._get_task_context(context)
+
         async def compress_single(edit: ContextEdit) -> ContextEdit:
             tool_use_msgs = self._get_tool_use_messages(edit.tool_use_id)
             original_content = self._extract_full_tool_result_content(
@@ -2460,6 +2499,7 @@ Tips to reach the threshold:
                     guidance=edit.guidance,
                     token_count=token_count,
                     context=context,
+                    task_context=task_context,
                 )
                 edit.tool_result_content_replacement = compressed
             except Exception as e:
