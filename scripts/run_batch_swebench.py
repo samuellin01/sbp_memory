@@ -546,8 +546,8 @@ def extract_results(
     _podman_cp("/app/logs.txt", "logs.txt")
 
     # 2b. context_edits.json — context edit log (if smart context was used)
-    # Written to /tmp/ to avoid the agent accidentally git-adding or deleting it
-    _podman_cp("/tmp/context_edits.json", "context_edits.json")
+    # --context-edit-log-dir is set to /app in build_agent_flags
+    _podman_cp("/app/context_edits.json", "context_edits.json")
 
     # 3. traj_*.json — list matching files inside the container then copy each
     try:
