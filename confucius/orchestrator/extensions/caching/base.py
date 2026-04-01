@@ -25,7 +25,7 @@ class BasePromptCaching(TokenEstimatorExtension, ABC):
 
     included_in_system_prompt: bool = False
     min_prompt_length: int = Field(
-        default=10000,
+        default=0,
         description="The minimum length of the prompt to create a cache break point, (unit: tokens).",
     )
     max_num_checkpoints: int = Field(
@@ -65,6 +65,10 @@ class BasePromptCaching(TokenEstimatorExtension, ABC):
         else:
             total_length = sum(await self.get_prompt_token_lengths(memory.messages))
         
+        # Reset checkpoint if context was compressed (total_length dropped below last checkpoint)
+        if total_length < self.get_last_checkpoint():
+            self.set_last_checkpoint(0)
+
         # Only consider adding a breakpoint if we've accumulated enough new tokens
         if total_length > self.get_last_checkpoint() + self.min_prompt_length:
             if len(memory.messages) > 0:
