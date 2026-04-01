@@ -82,7 +82,12 @@ def config_dir_name(config: str, args: argparse.Namespace) -> str:
     each other, e.g. ``smart_context_50000_20000``.
     """
     if config == CONFIG_SMART_CONTEXT:
-        return f"smart_context_v2_{args.compression_threshold}_{args.clear_at_least}"
+        parts = [f"sc_threshold_{args.compression_threshold}"]
+        if args.compression_cooldown_tokens is not None:
+            parts.append(f"cooldown_{args.compression_cooldown_tokens}")
+        if args.max_edits_per_call is not None:
+            parts.append(f"edits_{args.max_edits_per_call}")
+        return "_".join(parts)
     return config
 
 
