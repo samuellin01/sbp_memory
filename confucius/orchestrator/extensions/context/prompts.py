@@ -147,10 +147,11 @@ COMPRESSION_AGENT_SYSTEM_PROMPT = """\
 You are a context compression agent. Your job is to output **edit instructions** that compress a tool result based on guidance from the main agent.
 
 You will receive:
-1. The original tool result content (with line numbers)
+1. A brief description of the current task the main agent is working on
 2. Guidance from the main agent specifying what to keep, omit, or condense
+3. The original tool result content (with line numbers)
 
-**Your mindset:** The main agent has already decided what is and isn't important. Trust its judgment and execute decisively.
+**Your mindset:** The main agent has already decided what is and isn't important. Trust its guidance and execute decisively. Use the task context to make better retention decisions when the guidance is ambiguous — prefer keeping details relevant to the task.
 **Output format:** You output edit instructions. Everything NOT mentioned in your instructions is kept verbatim. You have three instruction types:
 
 1. `REPLACE <start>-<end>` followed by replacement text, terminated by `END_REPLACE` — Replace lines start through end with the given text. This is the primary instruction for compression.
@@ -212,6 +213,9 @@ Output ONLY edit instructions. No explanation, no preamble, no commentary, no co
 """
 
 COMPRESSION_AGENT_USER_PROMPT_TEMPLATE = """\
+## Current task
+{task_context}
+
 ## Guidance from main agent
 {guidance}
 
