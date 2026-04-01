@@ -92,15 +92,17 @@ class ContextEdit(BaseModel):
         exclude=True,  # Exclude from JSON schema shown to the main agent
     )
 
-    reason: str | None = Field(
-        default=None, description="Why this edit is needed (for debugging/logging)"
-    )
 
 
 class ContextEditInput(BaseModel):
     """Input schema for context_edit tool."""
 
     edits: list[ContextEdit] = Field(description="List of context edits to apply")
+    task_summary: str = Field(
+        default="",
+        description="Brief summary of the current task and progress so far (1-2 sentences). "
+        "This is passed to the compression agent to help it make better retention decisions.",
+    )
 
 
 class RejectedEdit(BaseModel):
@@ -340,23 +342,23 @@ class SmartContextManagementExtension(
     _tool_use_registry: dict[str, dict[str, Any]] = PrivateAttr(default_factory=dict)
     # Track which tool_use_ids were edited and how
     _edit_history: list[dict[str, Any]] = PrivateAttr(default_factory=list)
-    _task_context: str | None = PrivateAttr(default=None)
+    _fallback_task_context: str | None = PrivateAttr(default=None)
 
-    def _get_task_context(self, context: AnalectRunContext) -> str:
+    def _get_fallback_task_context(self, context: AnalectRunContext) -> str:
         """Extract a concise task description from the first user message.
 
-        Returns a cached result after the first call since the task doesn't change.
+        Used as fallback when the main agent doesn't provide a task_summary
+        (e.g. auto-forced edits). Cached after first call.
         """
-        if self._task_context is not None:
-            return self._task_context
+        if self._fallback_task_context is not None:
+            return self._fallback_task_context
 
-        max_chars = 500
+        max_chars = 300
         messages = context.memory_manager.get_session_memory().messages
         for msg in messages:
             if msg.type == cf.MessageType.HUMAN:
                 content = msg.content
                 if isinstance(content, list):
-                    # Extract text from content blocks
                     parts = []
                     for block in content:
                         if isinstance(block, str):
@@ -368,11 +370,11 @@ class SmartContextManagementExtension(
                     text = content.strip()
                     if len(text) > max_chars:
                         text = text[:max_chars] + "..."
-                    self._task_context = text
-                    return self._task_context
+                    self._fallback_task_context = text
+                    return self._fallback_task_context
 
-        self._task_context = "No task context available."
-        return self._task_context
+        self._fallback_task_context = "No task context available."
+        return self._fallback_task_context
 
     def _get_tool_use_messages(self, tool_use_id: str) -> _ToolUseMessages:
         """Get the messages for a single tool use."""
@@ -1226,6 +1228,7 @@ class SmartContextManagementExtension(
         pending_count: int,
         tool_use_id: str,
         context: AnalectRunContext,
+        task_summary: str = "",
     ) -> ant.MessageContentToolResult:
         """
         Handle successful edits.
@@ -1237,6 +1240,7 @@ class SmartContextManagementExtension(
             pending_count: Number of edits that were pending before success
             tool_use_id: ID of the tool use
             context: Analect run context
+            task_summary: Brief task + progress summary from the main agent
 
         Returns:
             Tool result with success message
@@ -1246,7 +1250,7 @@ class SmartContextManagementExtension(
         # Run compression agents if enabled
         if self.compression_agent_enabled:
             edits_to_apply = await self._run_compression_agents(
-                edits_to_apply, context
+                edits_to_apply, context, task_summary=task_summary
             )
 
         stats, edit_items = await self._apply_edits(edits_to_apply, context)
@@ -1753,7 +1757,8 @@ Applied {len(validation_result.valid_edits)} pending edit(s).
             )
 
         return await self._handle_successful_edits(
-            validation_result, pending_count, tool_use.id, context
+            validation_result, pending_count, tool_use.id, context,
+            task_summary=input_data.task_summary,
         )
 
     @override
@@ -2464,18 +2469,20 @@ Tips to reach the threshold:
         self,
         edits: list[ContextEdit],
         context: AnalectRunContext,
+        task_summary: str = "",
     ) -> list[ContextEdit]:
         """Run compression agents in parallel for all edits that need compression.
 
         Args:
             edits: List of edits with guidance from the main agent
             context: Analect run context
+            task_summary: Brief task + progress summary from the main agent.
+                Falls back to first user message if empty.
 
         Returns:
             List of edits with tool_result_content_replacement filled in
         """
-        # Extract task context once for all compression agents in this batch
-        task_context = self._get_task_context(context)
+        task_context = task_summary if task_summary else self._get_fallback_task_context(context)
 
         async def compress_single(edit: ContextEdit) -> ContextEdit:
             tool_use_msgs = self._get_tool_use_messages(edit.tool_use_id)
@@ -2589,7 +2596,6 @@ Tips to reach the threshold:
                 "tool_name": tool_name,
                 "operation": edit.operation.value,
                 "guidance": edit.guidance,
-                "reason": edit.reason,
                 "original_tool_use_input": original_input_preview,
                 "original_tool_result_content": original_result_preview,
                 "new_tool_use_input": new_input_preview,
