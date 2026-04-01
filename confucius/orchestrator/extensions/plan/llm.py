@@ -268,10 +268,21 @@ class LLMCodingArchitectExtension(LLMPlannerExtension):
         default=LLM_CODING_ARCHITECT_PROMPT,
         description="The messages to be sent to the LLM. This can be a list of strings or a list of CfMessage objects.",
     )
+    min_prompt_length: int = Field(
+        default=-1,
+        description="The threshold of minimum length of the prompt after trimming. "
+        "When set to -1 (default), uses max_prompt_length // 2.",
+    )
     log_dir: str = Field(
         default="/app",
         description="Directory to write architect_log.json.",
     )
+
+    @model_validator(mode="after")
+    def resolve_min_prompt_length(self) -> "LLMCodingArchitectExtension":  # noqa: B902
+        if self.min_prompt_length < 0:
+            self.min_prompt_length = self.max_prompt_length // 2
+        return self
 
     _summarization_count: int = PrivateAttr(default=0)
     _log_entries: list[dict[str, Any]] = PrivateAttr(default_factory=list)
