@@ -108,6 +108,7 @@ def build_agent_flags(
     compression_agent_max_tokens: Optional[int] = None,
     compression_cooldown_tokens: Optional[int] = None,
     max_edits_per_call: Optional[int] = None,
+    architect_trigger_tokens: Optional[int] = None,
 ) -> list[str]:
     """Return the CLI flags to pass to the agent for the given experiment config."""
     if config == CONFIG_SMART_CONTEXT:
@@ -136,8 +137,11 @@ def build_agent_flags(
         if max_edits_per_call is not None:
             flags.extend(["--max-edits-per-call", str(max_edits_per_call)])
         return flags
-    # no_compression — minimal flags
-    return ["--cache-min-prompt-length", "0"]
+    # no_compression — architect-based summarization
+    flags = ["--cache-min-prompt-length", "0"]
+    if architect_trigger_tokens is not None:
+        flags.extend(["--architect-trigger-tokens", str(architect_trigger_tokens)])
+    return flags
 
 
 # ---------------------------------------------------------------------------
@@ -575,6 +579,9 @@ def extract_results(
     # 5. token_usage_subagent.json — compression agent token usage
     _podman_cp("/app/token_usage_subagent.json", "token_usage_subagent.json")
 
+    # 6. architect_log.json — architect summarization log (no_compression baseline)
+    _podman_cp("/app/architect_log.json", "architect_log.json")
+
 
 # ---------------------------------------------------------------------------
 # AWS credential refresh
@@ -662,6 +669,7 @@ def run_problem(
         args.compression_agent_max_tokens,
         args.compression_cooldown_tokens,
         args.max_edits_per_call,
+        args.architect_trigger_tokens,
     )
 
     logger.info(
@@ -1117,6 +1125,15 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Maximum number of edits to apply per context_edit call. "
         "Agent ranks edits by confidence; only top-k are applied.",
+    )
+
+    # LLMCodingArchitectExtension (no_compression baseline)
+    parser.add_argument(
+        "--architect_trigger_tokens",
+        type=int,
+        default=None,
+        help="Token count that triggers architect summarization (default 180000). "
+        "Only used with no_compression config.",
     )
 
     # Container / agent
