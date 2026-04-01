@@ -143,6 +143,15 @@ def main() -> None:
         "Only used when --enable-smart-context is set.",
     )
 
+    # LLMCodingArchitectExtension configuration (used when smart context is disabled)
+    parser.add_argument(
+        "--architect-trigger-tokens",
+        type=int,
+        default=None,
+        help="Token count that triggers the architect summarization (default 180000). "
+        "Only used when --enable-smart-context is NOT set.",
+    )
+
     # Cache configuration (available regardless of smart context)
     parser.add_argument(
         "--cache-min-prompt-length",
@@ -292,6 +301,7 @@ Plz make sure you commit your change at the end, otherwise I won't be able to ex
                 compression_agent_max_tokens=args.compression_agent_max_tokens,
                 compression_cooldown_tokens=args.compression_cooldown_tokens,
                 max_edits_per_call=args.max_edits_per_call,
+                architect_trigger_tokens=args.architect_trigger_tokens,
             )
         )
         print("Agent completed successfully")
