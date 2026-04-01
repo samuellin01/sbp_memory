@@ -1,7 +1,12 @@
 # pyre-strict
 
+import datetime
 import html
+import json
+import logging
+import os
 from enum import Enum
+from typing import Any
 
 import bs4
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -17,6 +22,8 @@ from ..token.estimator import TokenEstimatorExtension
 
 from .prompts import LLM_CODING_ARCHITECT_PROMPT
 from .utils import prompt_to_convo_tag
+
+architect_logger = logging.getLogger("desktopenv.architect")
 
 
 class MessageFilterStatus(str, Enum):
@@ -66,7 +73,7 @@ class LLMPlannerExtension(TokenEstimatorExtension):
         description="The threshold of maximum length of the prompt, if exceeded, the planner will step-in and summarize the plan, otherwise, it will skip, (unit: tokens)",
     )
     min_prompt_length: int = Field(
-        default=50000,
+        default=0,
         description="The threshold of minimum length of the prompt, when planner is triggered, the prompt will be trimmed to less or equal to this length (unit: tokens)",
     )
     max_num_messages: int = Field(
@@ -248,7 +255,151 @@ class LLMPlannerExtension(TokenEstimatorExtension):
 
 
 class LLMCodingArchitectExtension(LLMPlannerExtension):
+    llm_params: LLMParams = Field(
+        default=LLMParams(
+            model="claude-opus-4-6",
+            temperature=0.3,
+            top_p=0.7,
+            initial_max_tokens=4096,
+        ),
+        description="The LLM parameters to use for the planner.",
+    )
     prompt: ChatPromptTemplate = Field(
         default=LLM_CODING_ARCHITECT_PROMPT,
         description="The messages to be sent to the LLM. This can be a list of strings or a list of CfMessage objects.",
     )
+    log_dir: str = Field(
+        default="/app",
+        description="Directory to write architect_log.json.",
+    )
+
+    _summarization_count: int = PrivateAttr(default=0)
+    _log_entries: list[dict[str, Any]] = PrivateAttr(default_factory=list)
+    # Stashed in on_memory for use in _on_invoke_llm
+    _tokens_before: int = PrivateAttr(default=0)
+    _tokens_omitted: int = PrivateAttr(default=0)
+    _messages_omitted_count: int = PrivateAttr(default=0)
+
+    def _write_log(self) -> None:
+        """Write accumulated log entries to architect_log.json."""
+        log_path = os.path.join(self.log_dir, "architect_log.json")
+        try:
+            with open(log_path, "w", encoding="utf-8") as f:
+                json.dump(self._log_entries, f, indent=2, default=str)
+        except Exception as exc:
+            architect_logger.warning("Failed to write architect_log.json: %s", exc)
+
+    async def on_memory(self, memory: CfMemory, context: AnalectRunContext) -> CfMemory:
+        # Compute token lengths before trimming
+        memory.messages = [
+            msg
+            for msg in memory.messages
+            if msg.additional_kwargs.get(__FILTER_STATUS_KEY__)
+            != MessageFilterStatus.OMITTED.value
+        ]
+        prompt_lengths = await self.get_prompt_token_lengths(memory.messages)
+        total_length = sum(prompt_lengths)
+
+        if (
+            total_length <= self.max_prompt_length
+            and len(memory.messages) <= self.max_num_messages
+        ):
+            self._messages_to_be_omitted.clear()
+            return memory
+
+        # Stash pre-trim stats
+        self._tokens_before = total_length
+        self._tokens_omitted = 0
+        self._messages_omitted_count = 0
+
+        for i in range(self.start_index, len(memory.messages)):
+            if (
+                total_length <= self.min_prompt_length
+                and memory.messages[i].type == cf.MessageType.AI
+            ):
+                break
+            memory.messages[i].additional_kwargs[
+                __FILTER_STATUS_KEY__
+            ] = MessageFilterStatus.WILL_BE_OMITTED.value
+            self._messages_to_be_omitted.append(memory.messages[i])
+            self._tokens_omitted += prompt_lengths[i]
+            self._messages_omitted_count += 1
+            total_length -= prompt_lengths[i]
+        return memory
+
+    async def _on_invoke_llm(
+        self,
+        messages: list[BaseMessage],
+        context: AnalectRunContext,
+        planning_reason: str | None = None,
+    ) -> list[BaseMessage]:
+        if not self._messages_to_be_omitted:
+            return messages
+
+        tokens_before = self._tokens_before
+        tokens_omitted = self._tokens_omitted
+        messages_omitted = self._messages_omitted_count
+        self._summarization_count += 1
+
+        # Capture message content previews before they're dropped
+        omitted_previews = []
+        for msg in self._messages_to_be_omitted:
+            content = msg.content
+            if isinstance(content, list):
+                parts = []
+                for block in content:
+                    if isinstance(block, str):
+                        parts.append(block)
+                    elif isinstance(block, dict) and block.get("type") == "text":
+                        parts.append(block.get("text", ""))
+                content = " ".join(parts)
+            preview = str(content)[:200] if content else ""
+            omitted_previews.append({
+                "type": msg.type.value if hasattr(msg.type, "value") else str(msg.type),
+                "preview": preview,
+            })
+
+        # Call parent to do the actual summarization
+        result = await super()._on_invoke_llm(messages, context, planning_reason)
+
+        # Extract the plan text from the new messages (last HumanMessage added)
+        plan_text = ""
+        for msg in reversed(result):
+            if isinstance(msg, HumanMessage):
+                content = msg.content
+                if isinstance(content, str):
+                    plan_text = content
+                break
+
+        tokens_after = tokens_before - tokens_omitted
+        tokens_saved = tokens_omitted
+        savings_pct = (tokens_saved / tokens_before * 100) if tokens_before > 0 else 0
+
+        log_entry: dict[str, Any] = {
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "event": "architect_summarization",
+            "summarization_number": self._summarization_count,
+            "trigger_threshold": self.max_prompt_length,
+            "tokens_before": tokens_before,
+            "tokens_omitted": tokens_omitted,
+            "tokens_after": tokens_after,
+            "savings_percent": round(savings_pct, 1),
+            "messages_omitted": messages_omitted,
+            "omitted_messages": omitted_previews,
+            "summary": plan_text[:2000],
+        }
+
+        self._log_entries.append(log_entry)
+        self._write_log()
+
+        architect_logger.info(
+            "Architect summarization #%d: %d→%d tokens (-%d, %.1f%%), %d messages omitted",
+            self._summarization_count,
+            tokens_before,
+            tokens_after,
+            tokens_saved,
+            savings_pct,
+            messages_omitted,
+        )
+
+        return result
