@@ -41,7 +41,6 @@ class LLMPlannerExtension(TokenEstimatorExtension):
         default=LLMParams(
             model="claude-sonnet-4",
             temperature=0.3,
-            top_p=0.7,
             initial_max_tokens=4096,
         ),
         description="The LLM parameters to use for the planner.",
