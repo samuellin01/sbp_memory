@@ -28,6 +28,7 @@ async def run_agent_with_prompt(
     compression_agent_max_tokens: Optional[int] = None,
     compression_cooldown_tokens: Optional[int] = None,
     max_edits_per_call: Optional[int] = None,
+    architect_trigger_tokens: Optional[int] = None,
 ) -> None:
     """
     Run the Confucius Code agent with a given prompt and wait for completion.
@@ -63,7 +64,7 @@ async def run_agent_with_prompt(
         # SmartContextConfig is specific to CodeAssistEntry, so we check for "Code" entry.
         # For other entries, smart_context_enabled is ignored and we use the standard Entry dispatcher.
         # We also need to directly instantiate CodeAssistEntry when cache parameters are provided.
-        if entry_name == "Code" and (smart_context_enabled or cache_min_prompt_length is not None or cache_max_num_checkpoints is not None):
+        if entry_name == "Code" and (smart_context_enabled or cache_min_prompt_length is not None or cache_max_num_checkpoints is not None or architect_trigger_tokens is not None):
             # Directly instantiate CodeAssistEntry with custom configuration
             smart_context_config = SmartContextConfig(
                 enabled=smart_context_enabled,
@@ -82,6 +83,7 @@ async def run_agent_with_prompt(
                 compression_agent_max_tokens=compression_agent_max_tokens,
                 compression_cooldown_tokens=compression_cooldown_tokens,
                 max_edits_per_call=max_edits_per_call,
+                architect_trigger_tokens=architect_trigger_tokens,
             )
             code_entry = CodeAssistEntry(smart_context_config=smart_context_config)
             await cf.invoke_analect(code_entry, EntryInput(question=prompt))
