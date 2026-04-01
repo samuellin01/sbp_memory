@@ -61,6 +61,7 @@ class SmartContextConfig:
     max_edits_per_call: Optional[int] = None
     # LLMCodingArchitectExtension config (used when smart context is disabled)
     architect_trigger_tokens: Optional[int] = None  # maps to max_prompt_length
+    architect_min_prompt_length: Optional[int] = None  # maps to min_prompt_length
 
 
 @public
@@ -193,6 +194,10 @@ class CodeAssistEntry(Analect[EntryInput, EntryOutput], EntryAnalectMixin):
             if self.smart_context_config.architect_trigger_tokens is not None:
                 architect_kwargs["max_prompt_length"] = (
                     self.smart_context_config.architect_trigger_tokens
+                )
+            if self.smart_context_config.architect_min_prompt_length is not None:
+                architect_kwargs["min_prompt_length"] = (
+                    self.smart_context_config.architect_min_prompt_length
                 )
             extensions.insert(0, LLMCodingArchitectExtension(**architect_kwargs))
             extensions.append(AnthropicPromptCaching(**build_cache_kwargs()))
