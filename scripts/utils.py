@@ -29,6 +29,7 @@ async def run_agent_with_prompt(
     compression_cooldown_tokens: Optional[int] = None,
     max_edits_per_call: Optional[int] = None,
     architect_trigger_tokens: Optional[int] = None,
+    architect_min_prompt_length: Optional[int] = None,
 ) -> None:
     """
     Run the Confucius Code agent with a given prompt and wait for completion.
@@ -84,6 +85,7 @@ async def run_agent_with_prompt(
                 compression_cooldown_tokens=compression_cooldown_tokens,
                 max_edits_per_call=max_edits_per_call,
                 architect_trigger_tokens=architect_trigger_tokens,
+                architect_min_prompt_length=architect_min_prompt_length,
             )
             code_entry = CodeAssistEntry(smart_context_config=smart_context_config)
             await cf.invoke_analect(code_entry, EntryInput(question=prompt))
