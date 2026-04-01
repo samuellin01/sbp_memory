@@ -259,7 +259,6 @@ class LLMCodingArchitectExtension(LLMPlannerExtension):
         default=LLMParams(
             model="claude-opus-4-6",
             temperature=0.3,
-            top_p=0.7,
             initial_max_tokens=4096,
         ),
         description="The LLM parameters to use for the planner.",
