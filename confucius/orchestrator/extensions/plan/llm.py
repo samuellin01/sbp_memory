@@ -361,8 +361,25 @@ class LLMCodingArchitectExtension(LLMPlannerExtension):
                 for block in content:
                     if isinstance(block, str):
                         parts.append(block)
-                    elif isinstance(block, dict) and block.get("type") == "text":
-                        parts.append(block.get("text", ""))
+                    elif isinstance(block, dict):
+                        block_type = block.get("type", "")
+                        if block_type == "text":
+                            parts.append(block.get("text", ""))
+                        elif block_type == "tool_use":
+                            name = block.get("name", "")
+                            inp = block.get("input", {})
+                            inp_preview = str(inp)[:100]
+                            parts.append(f"[tool_use: {name}({inp_preview})]")
+                        elif block_type == "tool_result":
+                            tool_content = block.get("content", "")
+                            if isinstance(tool_content, list):
+                                tool_content = " ".join(
+                                    tc.get("text", "") if isinstance(tc, dict) else str(tc)
+                                    for tc in tool_content
+                                )
+                            parts.append(f"[tool_result: {str(tool_content)[:100]}]")
+                        elif block_type == "thinking":
+                            parts.append(f"[thinking: {str(block.get('thinking', ''))[:100]}]")
                 content = " ".join(parts)
             preview = str(content)[:200] if content else ""
             omitted_previews.append({
