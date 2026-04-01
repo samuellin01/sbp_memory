@@ -88,6 +88,11 @@ def config_dir_name(config: str, args: argparse.Namespace) -> str:
         if args.max_edits_per_call is not None:
             parts.append(f"edits_{args.max_edits_per_call}")
         return "_".join(parts)
+    if config == CONFIG_NO_COMPRESSION and args.architect_trigger_tokens is not None:
+        parts = [f"architect_trigger_{args.architect_trigger_tokens}"]
+        if args.architect_min_prompt_length is not None:
+            parts.append(f"min_{args.architect_min_prompt_length}")
+        return "_".join(parts)
     return config
 
 
