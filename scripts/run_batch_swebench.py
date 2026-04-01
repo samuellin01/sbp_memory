@@ -109,6 +109,7 @@ def build_agent_flags(
     compression_cooldown_tokens: Optional[int] = None,
     max_edits_per_call: Optional[int] = None,
     architect_trigger_tokens: Optional[int] = None,
+    architect_min_prompt_length: Optional[int] = None,
 ) -> list[str]:
     """Return the CLI flags to pass to the agent for the given experiment config."""
     if config == CONFIG_SMART_CONTEXT:
@@ -141,6 +142,8 @@ def build_agent_flags(
     flags = ["--cache-min-prompt-length", "0"]
     if architect_trigger_tokens is not None:
         flags.extend(["--architect-trigger-tokens", str(architect_trigger_tokens)])
+    if architect_min_prompt_length is not None:
+        flags.extend(["--architect-min-prompt-length", str(architect_min_prompt_length)])
     return flags
 
 
@@ -670,6 +673,7 @@ def run_problem(
         args.compression_cooldown_tokens,
         args.max_edits_per_call,
         args.architect_trigger_tokens,
+        args.architect_min_prompt_length,
     )
 
     logger.info(
@@ -1133,6 +1137,14 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Token count that triggers architect summarization (default 180000). "
+        "Only used with no_compression config.",
+    )
+    parser.add_argument(
+        "--architect_min_prompt_length",
+        type=int,
+        default=None,
+        help="Minimum token length after architect trimming (default: trigger_tokens / 2). "
+        "Controls how much recent context is preserved. "
         "Only used with no_compression config.",
     )
 
