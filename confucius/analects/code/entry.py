@@ -59,6 +59,8 @@ class SmartContextConfig:
     compression_agent_max_tokens: Optional[int] = None
     compression_cooldown_tokens: Optional[int] = None
     max_edits_per_call: Optional[int] = None
+    # LLMCodingArchitectExtension config (used when smart context is disabled)
+    architect_trigger_tokens: Optional[int] = None  # maps to max_prompt_length
 
 
 @public
@@ -187,7 +189,12 @@ class CodeAssistEntry(Analect[EntryInput, EntryOutput], EntryAnalectMixin):
             # When SmartContextManagementExtension is disabled (default):
             # - Both LLMCodingArchitectExtension and AnthropicPromptCaching are added
             # - This provides the default behavior with planning and caching
-            extensions.insert(0, LLMCodingArchitectExtension())
+            architect_kwargs: dict[str, Any] = {}
+            if self.smart_context_config.architect_trigger_tokens is not None:
+                architect_kwargs["max_prompt_length"] = (
+                    self.smart_context_config.architect_trigger_tokens
+                )
+            extensions.insert(0, LLMCodingArchitectExtension(**architect_kwargs))
             extensions.append(AnthropicPromptCaching(**build_cache_kwargs()))
 
         orchestrator = AnthropicLLMOrchestrator(
